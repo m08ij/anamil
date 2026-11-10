@@ -75,21 +75,22 @@ for (const l of ['en', 'ar']) {
 
 /* ================= State ================= */
 const STORE = 'anamil-v1';
-const newProfile = () => ({ placed: false, placement: null, keys: {}, history: [], tests: [], sentHist: [], seenSent: [], errorWords: {}, conf: {}, unlocked: 6, sinceUnlock: 0, target: 25, totalMs: 0 });
+const newProfile = () => ({ placed: false, placement: null, keys: {}, history: [], tests: [], sentHist: [], seenSent: [], errorWords: {}, conf: {}, bi: {}, unlocked: 6, sinceUnlock: 0, target: 25, totalMs: 0 });
 let S = null;
 try { S = JSON.parse(localStorage.getItem(STORE)); } catch (e) {}
 if (!S || typeof S !== 'object') S = {};
 S.lang = S.lang || 'ar';
 S.theme = S.theme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
 if (S.sound === undefined) S.sound = true;
-S.settings = Object.assign({ length: 25, stopOnError: false, lenient: true, keyboard: true, fingers: true, testDur: 60 }, S.settings);
+S.settings = Object.assign({ length: 25, stopOnError: false, lenient: true, keyboard: true, fingers: true, testDur: 60,
+  ghost: 'best', combo: true, fx: true, fontAr: 'plex', fontEn: 'jet', size: 'm', caret: 'line', smooth: true, volume: 0.6 }, S.settings);
 S.profiles = S.profiles || {};
 for (const l of ['ar', 'en']) S.profiles[l] = Object.assign(newProfile(), S.profiles[l]);
 const save = () => { try { localStorage.setItem(STORE, JSON.stringify(S)); } catch (e) {} };
 const P = () => S.profiles[S.lang];
 
 let view = 'type', tab = 'practice', mode = 'practice', T = null;
-let spans = [], caret = null, lineH = 40, line0 = 0, kbKeys = {};
+let spans = [], caret = null, ghostEl = null, lineH = 40, line0 = 0, kbKeys = {};
 const textEl = $('#text'), wrapEl = $('#textWrap'), board = $('#board');
 
 /* ================= Adaptive lesson logic ================= */
@@ -145,6 +146,12 @@ function makeLesson() {
     const src = both.length >= 2 ? both : one;
     for (let i = 0; i < Math.min(4, Math.floor(N / 6)) && src.length; i++) words.push(pick(src));
   }
+  // أبطأ ثنائيات حروف: كلمات فيها هالتركيبات
+  const bis = weakBigrams(2, set).filter(b => b.score > 1.15 && pool.some(w => w.includes(b.key)));
+  for (const b of bis) {
+    const src = pool.filter(w => w.includes(b.key));
+    for (let i = 0; i < Math.min(3, Math.floor(N / 8)); i++) words.push(pick(src));
+  }
   const withFocus = pool.filter(w => focus.some(f => w.includes(f)));
   let guard = 0;
   while (words.length < N && guard++ < 500) {
@@ -155,7 +162,7 @@ function makeLesson() {
     if (words[words.length - 1] === w) continue;
     words.push(w);
   }
-  return { words: shuffle(words), focus, review, drill };
+  return { words: shuffle(words), focus, review, drill, bigrams: bis.map(b => b.key) };
 }
 function makeSentences() {
   const p = P(), list = SENT[S.lang], avg = avgTime();
@@ -164,15 +171,17 @@ function makeSentences() {
     .sort((a, b) => weakness(b, avg) - weakness(a, avg)).slice(0, 4);
   for (const c of topConfusions(2, 3)) if (ORDER[S.lang].includes(c.exp) && !weak.includes(c.exp)) weak.unshift(c.exp);
   const seen = new Set(p.seenSent);
+  const bis = weakBigrams(3).filter(b => b.score > 1.15).map(b => b.key);
   const picked = list.map((s, i) => {
     const low = s.toLowerCase(); let sc = Math.random() * 2;
     for (const k of weak) sc += (low.split(k).length - 1) * 0.6;   // جمل فيها حروفك الضعيفة أولاً
+    for (const b of bis) sc += (low.split(b).length - 1) * 0.8;    // وثنائياتك البطيئة
     if (seen.has(i)) sc -= 6;                                        // وتجنّب تكرار جمل قريبة
     return { i, sc };
   }).sort((a, b) => b.sc - a.sc).slice(0, n).map(x => x.i);
   p.seenSent = [...p.seenSent, ...picked].slice(-Math.floor(list.length * 0.6));
   const text = picked.map(i => list[i]).join(' ');
-  return { words: text.split(' '), focus: weak.slice(0, 3), review: [] };
+  return { words: text.split(' '), focus: weak.slice(0, 3), review: [], bigrams: bis.filter(b => text.toLowerCase().includes(b)).slice(0, 2) };
 }
 function randomWords(n) {
   const list = WORDS[S.lang], out = [];
@@ -290,6 +299,7 @@ function renderText() {
   textEl.className = 'text ' + S.lang;
   wrapEl.className = 'text-wrap ' + S.lang;
   caret = document.createElement('i'); caret.className = 'caret idle'; textEl.appendChild(caret);
+  ghostEl = document.createElement('i'); ghostEl.className = 'ghost-caret'; ghostEl.hidden = true; textEl.appendChild(ghostEl);
   appendText(T.text);
   textEl.style.transform = '';
 }
@@ -297,38 +307,92 @@ function measure() {
   lineH = parseFloat(getComputedStyle(textEl).lineHeight) || 40;
   line0 = spans[0] ? spans[0].offsetTop : 0;
 }
-function placeCaret() {
-  if (!spans.length || !T) return;
-  const rtl = S.lang === 'ar'; let i = T.pos, end = false;
+function posFor(i) {
+  const rtl = S.lang === 'ar'; let end = false;
   if (i >= spans.length) { i = spans.length - 1; end = true; }
   const sp = spans[i], l = sp.offsetLeft, w = sp.offsetWidth;
   const x = rtl ? (end ? l : l + w) : (end ? l + w : l);
-  caret.style.transform = `translate(${x - 1}px, ${sp.offsetTop}px)`;
-  caret.style.height = sp.offsetHeight + 'px';
-  const ln = Math.round((sp.offsetTop - line0) / lineH);
+  return { x, l, w: end ? 0 : w, y: sp.offsetTop, h: sp.offsetHeight };
+}
+function placeCaret() {
+  if (!spans.length || !T) return;
+  const p = posFor(T.pos), cs = S.settings.caret;
+  if (cs === 'line') {
+    caret.style.width = ''; caret.style.height = p.h + 'px';
+    caret.style.transform = `translate(${p.x - 1}px, ${p.y}px)`;
+  } else {
+    const w = p.w || Math.round(lineH * 0.3), left = p.w ? p.l : (S.lang === 'ar' ? p.x - w : p.x);
+    caret.style.width = w + 'px';
+    caret.style.height = cs === 'block' ? p.h + 'px' : '3px';
+    caret.style.transform = `translate(${left}px, ${p.y + (cs === 'block' ? 0 : p.h - 3)}px)`;
+  }
+  const ln = Math.round((p.y - line0) / lineH);
   textEl.style.transform = `translateY(${-Math.max(0, ln - 1) * lineH}px)`;
+}
+/* الشبح: مؤشر بيمشي بسرعة أفضل نتيجة إلك */
+function ghostRef() {
+  const g = S.settings.ghost, p = P();
+  if (g === 'off' || mode === 'placement') return 0;
+  if (g === 'target') return p.target;
+  const list = mode === 'practice' ? p.history : mode === 'sentences' ? p.sentHist : p.tests.filter(t => t.dur === S.settings.testDur && !t.placement);
+  const recent = list.slice(-30);
+  if (!recent.length) return 0;
+  if (g === 'best') return Math.max(...recent.map(x => x.wpm));
+  const last = recent.slice(-10);
+  return Math.round(last.reduce((a, b) => a + b.wpm, 0) / last.length);
+}
+function updateGhost() {
+  const box = $('#ghostBox');
+  if (!T || !T.ghostWpm) { box.hidden = true; if (ghostEl) ghostEl.hidden = true; return; }
+  box.hidden = false;
+  if (!T.started) { ghostEl.hidden = true; $('#liveGhost').textContent = T.ghostWpm; $('#ghostLbl').textContent = '👻 سرعة الشبح'; box.dataset.state = ''; return; }
+  const idx = Math.min(spans.length, Math.floor(T.ghostWpm * 5 / 60 * (performance.now() - T.t0) / 1000));
+  const p = posFor(idx);
+  ghostEl.hidden = T.done; ghostEl.style.height = p.h + 'px';
+  ghostEl.style.transform = `translate(${p.x - 1}px, ${p.y}px)`;
+  const diff = T.pos - idx;
+  $('#liveGhost').textContent = (diff > 0 ? '+' : '') + diff;
+  $('#ghostLbl').textContent = diff >= 0 ? '👻 حرف قدّام الشبح' : '👻 حرف ورا الشبح';
+  box.dataset.state = diff >= 0 ? 'ahead' : 'behind';
+}
+
+/* ثنائيات الحروف: كم بتاخد من حرف للحرف اللي بعده */
+function recordBigram(a, b, ok, dt) {
+  const p = P(), key = S.lang === 'en' ? (a + b).toLowerCase() : a + b;
+  if (!/^\p{L}\p{L}$/u.test(key)) return;
+  const s = p.bi[key] || (p.bi[key] = { n: 0, m: 0, t: 0 });
+  if (ok) { s.n++; if (dt > 15 && dt < 2500) s.t = s.t ? s.t * 0.8 + dt * 0.2 : dt; }
+  else s.m++;
+  if (s.n + s.m > 120) { s.n *= 0.8; s.m *= 0.8; }
+}
+function weakBigrams(k = 8, set = null) {
+  const e = Object.entries(P().bi).filter(([key, s]) => s.n + s.m >= 6 && s.t && (!set || [...key].every(c => set.has(normU(c)))));
+  if (!e.length) return [];
+  const avg = e.reduce((a, [, s]) => a + s.t, 0) / e.length;
+  return e.map(([key, s]) => ({ key, s, score: s.t / avg + (s.m / (s.n + s.m)) * 6 }))
+    .sort((a, b) => b.score - a.score).slice(0, k);
 }
 
 /* ================= Round lifecycle ================= */
 function newRound(reuse) {
   stopTicker();
-  let words, focus = [], review = [], drill = null;
+  let words, focus = [], review = [], drill = null, bigrams = [];
   if (mode === 'practice' || mode === 'sentences') {
-    const L = reuse || (mode === 'practice' ? makeLesson() : makeSentences()); words = L.words; focus = L.focus; review = L.review || []; drill = L.drill || null;
+    const L = reuse || (mode === 'practice' ? makeLesson() : makeSentences()); words = L.words; focus = L.focus; review = L.review || []; drill = L.drill || null; bigrams = L.bigrams || [];
   } else words = reuse ? reuse.words : randomWords(mode === 'test' ? Math.max(60, S.settings.testDur * 2) : 120);
   T = {
-    words: [...words], focus, review, drill, conf: {}, confHinted: false, text: words.join(' '), pos: 0, marks: [], correct: 0, keys: 0, errors: 0,
+    words: [...words], focus, review, drill, bigrams, conf: {}, confHinted: false, combo: 0, bestCombo: 0, ghostWpm: ghostRef(), text: words.join(' '), pos: 0, marks: [], correct: 0, keys: 0, errors: 0,
     started: false, done: false, t0: 0, last: 0, wordErr: new Set(), sk: {}, samples: [], wordOf: [],
     duration: mode === 'test' ? S.settings.testDur : mode === 'placement' ? 60 : 0
   };
   calcWordOf();
-  renderText(); renderModeBar(); renderKbLabels(); updateLive();
+  renderText(); renderModeBar(); renderKbLabels(); updateLive(); updateCombo(); updateGhost();
   $('#result').hidden = true; board.hidden = false; board.classList.remove('running');
   requestAnimationFrame(() => { measure(); placeCaret(); highlight(); });
 }
 function restart() {
   if (!T) return;
-  if ((mode === 'practice' || mode === 'sentences') && (T.started || T.done)) newRound({ words: T.words, focus: T.focus, review: T.review, drill: T.drill });
+  if ((mode === 'practice' || mode === 'sentences') && (T.started || T.done)) newRound({ words: T.words, focus: T.focus, review: T.review, drill: T.drill, bigrams: T.bigrams });
   else newRound();
 }
 function next() {
@@ -353,7 +417,7 @@ function startTicker() {
       }
       if (el >= T.duration) { finish(); return; }
     }
-    updateLive();
+    updateLive(); updateGhost();
   }, 100);
 }
 function stopTicker() { if (tick) clearInterval(tick); tick = null; }
@@ -387,6 +451,10 @@ function typeChar(c) {
   const exp = T.text[T.pos], ok = same(c, exp), dt = now - T.last;
   T.last = now; T.keys++;
   if (exp !== ' ') recordKey(exp, ok, T.pos > 0 ? dt : 0);
+  const prevC = T.text[T.pos - 1];
+  if (exp !== ' ' && prevC && prevC !== ' ' && T.marks[T.pos - 1] === true) recordBigram(prevC, exp, ok, dt);
+  if (ok) { T.combo++; if (T.combo > T.bestCombo) T.bestCombo = T.combo; updateCombo(); }
+  else { const had = T.combo >= 10; T.combo = 0; updateCombo(had); }
   if (!ok) {
     T.errors++; T.wordErr.add(T.wordOf[T.pos]); sound('err'); flashErr(exp); recordConf(exp, c);
     if (S.settings.stopOnError) {
@@ -447,6 +515,15 @@ function finish() {
     return { exp, typed, n, type: classify(exp, typed, e && e.a / e.n >= 0.5) };
   });
   decayConf();
+  const biKeys = Object.entries(p.bi);
+  if (biKeys.length > 600) biKeys.sort((a, b) => (a[1].n + a[1].m) - (b[1].n + b[1].m)).slice(0, biKeys.length - 600).forEach(([k]) => delete p.bi[k]);
+  r.bestCombo = T.bestCombo;
+  if (T.ghostWpm) {
+    const ghostMs = T.text.length / (T.ghostWpm * 5 / 60) * 1000;
+    r.ghost = { ref: T.ghostWpm, win: T.duration ? wpm >= T.ghostWpm : ms <= ghostMs };
+  }
+  const prevList = mode === 'practice' ? p.history : mode === 'sentences' ? p.sentHist : null;
+  if (prevList && prevList.length) r.newBest = wpm > Math.max(...prevList.map(x => x.wpm));
 
   if (mode === 'placement' && T.keys < 15) {
     save(); board.hidden = true; $('#kb').hidden = true; $('#finger').hidden = true;
@@ -500,10 +577,15 @@ function showResult(r) {
     html += `<h2>${r.acc >= 0.97 ? 'ممتاز! 🔥' : r.acc >= 0.92 ? 'أحسنت 👍' : 'ركّز على الدقة أكثر من السرعة 🎯'}</h2>`;
   }
   html += `<div class="r-nums">
-    <div class="r-num"><b>${r.wpm}</b><span>كلمة/دقيقة${delta != null ? `<em class="${delta >= 0 ? 'up' : 'down'}">${delta >= 0 ? '▲' : '▼'}${Math.abs(delta)}</em>` : ''}</span></div>
-    <div class="r-num"><b>${Math.round(r.acc * 100)}%</b><span>الدقة</span></div>
+    <div class="r-num"><b data-to="${r.wpm}">0</b><span>كلمة/دقيقة${delta != null ? `<em class="${delta >= 0 ? 'up' : 'down'}">${delta >= 0 ? '▲' : '▼'}${Math.abs(delta)}</em>` : ''}</span></div>
+    <div class="r-num"><b data-to="${Math.round(r.acc * 100)}" data-suf="%">0%</b><span>الدقة</span></div>
     <div class="r-num sm"><b>${fmtTime(r.ms)}</b><span>الوقت</span></div>
+    ${r.bestCombo ? `<div class="r-num sm"><b data-to="${r.bestCombo}">0</b><span>أطول سلسلة</span></div>` : ''}
   </div>`;
+  const badges = [];
+  if (r.newBest) badges.push('<span class="badge-pop gold">🏆 أفضل نتيجة إلك</span>');
+  if (r.ghost) badges.push(r.ghost.win ? `<span class="badge-pop good">👻 سبقت الشبح (${r.ghost.ref} ك/د)</span>` : `<span class="badge-pop">👻 الشبح سبقك — سرعته ${r.ghost.ref} ك/د</span>`);
+  if (badges.length) html += `<div class="badges-row">${badges.join('')}</div>`;
   html += '%%ACTIONS%%';
   if (r.mode === 'placement') html += `<div class="next-step"><b>الخطوة الجاية 👇</b><p>دروس قصيرة (حوالي دقيقة لكل درس) مبنية على نتيجتك. كل درس بيركّز على الحروف اللي غلطت فيها، وبيرجّعلك الكلمات الخاطئة لحد ما تكتبها صح. بعد كل درس بتشوف نتيجتك وبتضغط <kbd>Enter</kbd> للدرس اللي بعده.</p></div>`;
   if (r.unlocked) html += `<div class="unlock-msg"><span class="chip">${r.unlocked}</span><div><b>فتحت حرفاً جديداً!</b><div class="lbl">وصلت للهدف في درسين متتاليين — الحرف الجديد سيظهر كثيراً في الدروس القادمة.</div></div></div>`;
@@ -543,6 +625,9 @@ function showResult(r) {
   html += '</div>';
   const actions = `<div class="r-actions"><button class="btn primary big" id="rNext">${cta} <kbd>Enter</kbd></button>${r.mode !== 'placement' ? '<button class="btn" id="rAgain">إعادة نفس النص <kbd>Tab</kbd></button>' : ''}<button class="btn ghost" id="rStats">الإحصائيات</button></div>`;
   box.innerHTML = html.replace('%%ACTIONS%%', actions);
+  box.querySelectorAll('[data-to]').forEach(countUp);
+  if (r.mode === 'placement' || r.record || r.newBest || r.unlocked) setTimeout(() => burst(r.mode === 'placement' ? 140 : 110), 250);
+  else if (r.ghost && r.ghost.win) setTimeout(() => burst(50), 250);
   $('#kb').hidden = true; $('#finger').hidden = true;
   box.scrollIntoView({ block: 'start', behavior: 'smooth' });
   $('#rNext').onclick = next;
@@ -647,6 +732,7 @@ function renderModeBar() {
     let h = `<div class="chips"><span class="lbl">التركيز على</span>${T.focus.map(k => `<span class="chip">${k}</span>`).join('')}</div>`;
     if (p.unlocked < all.length) h += `<div class="unlock" title="الحروف المفتوحة">${all.map((c, i) => `<i class="${i < p.unlocked ? 'on' : ''} ${c === newest ? 'new' : ''}">${c}</i>`).join('')}</div>`;
     h += `<span class="spacer"></span>`;
+    if (T.bigrams.length) h += `<span class="pill">🔗 ثنائيات: ${T.bigrams.map(b => `<b>${esc(b)}</b>`).join(' · ')}</span>`;
     if (T.drill) h += `<span class="pill" title="${esc(CONF_INFO[T.drill.type].tip)}">🔀 تمرين: <b>${esc(T.drill.exp)}</b> مش <b>${esc(T.drill.typed)}</b></span>`;
     if (T.review.length) h += `<span class="pill">🔁 مراجعة <b>${T.review.length}</b> كلمات غلطت فيها</span>`;
     h += `<span class="pill">الهدف <b>${p.target}</b> ك/د</span>`;
@@ -654,7 +740,9 @@ function renderModeBar() {
   } else if (mode === 'sentences') {
     bar.innerHTML = `<div class="chips"><span class="lbl">جمل حقيقية بعلامات ترقيم${S.lang === 'en' ? ' وأحرف كبيرة' : ''}</span></div>`
       + (T.focus.length ? `<div class="chips"><span class="lbl">اخترنا جملاً فيها حروفك الضعيفة</span>${T.focus.map(k => `<span class="chip">${k}</span>`).join('')}</div>` : '')
-      + `<span class="spacer"></span><span class="pill">${SENT[S.lang].length} جملة بالمكتبة</span>`;
+      + `<span class="spacer"></span>`
+      + (T.bigrams.length ? `<span class="pill">🔗 ثنائيات: ${T.bigrams.map(b => `<b>${esc(b)}</b>`).join(' · ')}</span>` : '')
+      + `<span class="pill">${SENT[S.lang].length} جملة بالمكتبة</span>`;
   } else if (mode === 'test') {
     bar.innerHTML = `<span class="lbl">اختبار سرعة بكلمات عشوائية شائعة</span><span class="spacer"></span><div class="durs">${[15, 30, 60, 120].map(d => `<button data-dur="${d}" class="${d === S.settings.testDur ? 'active' : ''}">${d}ث</button>`).join('')}</div>`;
     bar.querySelectorAll('[data-dur]').forEach(b => b.onclick = () => { S.settings.testDur = +b.dataset.dur; save(); b.blur(); newRound(); });
@@ -664,7 +752,13 @@ function renderModeBar() {
 }
 
 /* ================= Views ================= */
-function show(v) { view = v; $$('.view').forEach(s => s.hidden = s.id !== 'view-' + v); }
+function show(v) {
+  view = v;
+  $$('.view').forEach(s => {
+    const on = s.id === 'view-' + v; s.hidden = !on;
+    if (on && !reduced) { s.classList.remove('enter'); void s.offsetWidth; s.classList.add('enter'); }
+  });
+}
 function go(t) {
   tab = t; stopTicker();
   $$('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === t));
@@ -707,6 +801,16 @@ function confPanel() {
     <div class="conf-tip"><span class="tag t-${main}">${CONF_INFO[main].label}</span><p>أكثر نوع خطأ عندك. ${CONF_INFO[main].tip}</p>
     <p class="lbl">الدروس بتضيف تمرين تلقائي على أكثر خطأ متكرر، والأخطاء القديمة بتخف مع الوقت لما تتحسّن.</p></div></div></div>`;
 }
+function biPanel() {
+  const list = weakBigrams(10);
+  if (!list.length) return `<div class="panel"><h2>🔗 ثنائيات الحروف</h2><div class="empty">بعد كم درس بنعرف أي تركيبات حرفين (مثل «ال» و«th») بتبطّئك.</div></div>`;
+  const fastest = Math.max(...list.map(b => 60000 / b.s.t));
+  return `<div class="panel"><h2>🔗 أبطأ ثنائيات الحروف <span class="lbl">— الدروس والجمل بتركّز عليها تلقائياً</span></h2>
+    <div class="bigrams" dir="${S.lang === 'ar' ? 'rtl' : 'ltr'}">${list.map(({ key, s }) => {
+      const cpm = Math.round(60000 / s.t), acc = Math.round(s.n / (s.n + s.m) * 100);
+      return `<div class="bgm"><b>${esc(key)}</b><div class="bar"><i style="width:${clamp(cpm / fastest * 100, 8, 100)}%;background:var(--accent)"></i></div><span class="num">${cpm} ح/د · ${acc}%</span></div>`;
+    }).join('')}</div></div>`;
+}
 function renderStats() {
   const p = P(), all = ORDER[S.lang], ar = S.lang === 'ar';
   const merged = [...p.history, ...p.sentHist, ...p.tests].sort((a, b) => a.d - b.d);
@@ -732,6 +836,7 @@ function renderStats() {
   </div>
   <div class="panel"><h2>منحنى التقدّم</h2>${chart(merged.slice(-60))}</div>
   ${confPanel()}
+  ${biPanel()}
   <div class="panel"><h2>خريطة الأخطاء على الكيبورد <span class="lbl">— كلما احمرّ المفتاح زادت أخطاؤك فيه</span></h2><div class="kb heat" id="heatKb"></div></div>
   <div class="two">
     <div class="panel"><h2>أضعف الحروف</h2>${weak.length ? `<table class="kt">${weak.map(({ k, s }) => {
@@ -755,12 +860,176 @@ function sound(type) {
     const err = type === 'err';
     o.type = err ? 'square' : 'triangle';
     o.frequency.value = err ? 130 : 620 + Math.random() * 90;
-    g.gain.setValueAtTime(err ? 0.035 : 0.02, t);
+    const v = (S.settings.volume ?? 0.6) * 1.6;
+    if (v <= 0) return;
+    g.gain.setValueAtTime((err ? 0.035 : 0.02) * v, t);
     g.gain.exponentialRampToValueAtTime(0.0001, t + (err ? 0.13 : 0.035));
     o.connect(g).connect(actx.destination); o.start(t); o.stop(t + 0.14);
   } catch (e) {}
 }
-function applyTheme() { document.documentElement.dataset.theme = S.theme; }
+/* ================= Appearance ================= */
+const SKINS = {
+  night:    { name: 'ليلي',      base: 'dark',  bg: '#0d0f13', ac: '#f2b544', tx: '#e9ebf1' },
+  sand:     { name: 'رملي',      base: 'light', bg: '#f5f3ee', ac: '#d08a10', tx: '#1c2029' },
+  navy:     { name: 'كحلي',      base: 'dark',  bg: '#0b1324', ac: '#5cc8ff', tx: '#e6edf9' },
+  mint:     { name: 'نعناعي',    base: 'light', bg: '#eef7f3', ac: '#14a37f', tx: '#16302a' },
+  paper:    { name: 'ورق قديم',  base: 'light', bg: '#f3ead8', ac: '#a4532b', tx: '#3b2f22' },
+  contrast: { name: 'تباين عالي', base: 'dark',  bg: '#000000', ac: '#ffe600', tx: '#ffffff' }
+};
+const FONTS_AR = { plex: ['IBM Plex', '"IBM Plex Sans Arabic"'], cairo: ['Cairo', '"Cairo"'], tajawal: ['Tajawal', '"Tajawal"'], amiri: ['أميري', '"Amiri"'] };
+const FONTS_EN = { jet: ['JetBrains', '"JetBrains Mono"'], plexmono: ['Plex Mono', '"IBM Plex Mono"'], source: ['Source Code', '"Source Code Pro"'] };
+const SIZES = { s: ['صغير', 0.85], m: ['وسط', 1], l: ['كبير', 1.18], xl: ['أكبر', 1.35] };
+const CARETS = { line: 'خط', block: 'مربع', under: 'تحت الحرف' };
+const GHOSTS = { off: 'بدون', best: 'أفضل نتيجة', avg: 'متوسطي', target: 'الهدف' };
+const LENGTHS = { 15: 'قصير', 25: 'متوسط', 40: 'طويل' };
+if (!SKINS[S.skin]) S.skin = S.theme === 'light' ? 'sand' : 'night';
+if (!FONTS_AR[S.settings.fontAr]) S.settings.fontAr = 'plex';
+if (!FONTS_EN[S.settings.fontEn]) S.settings.fontEn = 'jet';
+if (!SIZES[S.settings.size]) S.settings.size = 'm';
+if (!CARETS[S.settings.caret]) S.settings.caret = 'line';
+if (!GHOSTS[S.settings.ghost]) S.settings.ghost = 'best';
+
+function applyAppearance() {
+  const sk = SKINS[S.skin], root = document.documentElement, st = S.settings;
+  root.dataset.theme = sk.base; root.dataset.skin = S.skin;
+  root.style.setProperty('--font-ar', FONTS_AR[st.fontAr][1] + ', "IBM Plex Sans Arabic", sans-serif');
+  root.style.setProperty('--font-en', FONTS_EN[st.fontEn][1] + ', "JetBrains Mono", monospace');
+  root.style.setProperty('--fscale', SIZES[st.size][1]);
+  root.dataset.caret = st.caret; root.dataset.smooth = st.smooth ? '1' : '0';
+  $('#comboBox').hidden = !st.combo;
+  const re = () => { if (view === 'type' && T) { measure(); placeCaret(); } };
+  requestAnimationFrame(re);
+  if (document.fonts) document.fonts.ready.then(re);
+}
+
+/* ================= Settings drawer ================= */
+const drawer = $('#drawer'), scrim = $('#scrim');
+const drawerOpen = () => drawer.classList.contains('open');
+function openDrawer() {
+  buildSettings();
+  drawer.classList.add('open'); drawer.setAttribute('aria-hidden', 'false'); scrim.hidden = false;
+  requestAnimationFrame(() => scrim.classList.add('on'));
+}
+function closeDrawer(silent) {
+  drawer.classList.remove('open'); drawer.setAttribute('aria-hidden', 'true');
+  scrim.classList.remove('on'); setTimeout(() => { if (!drawerOpen()) scrim.hidden = true; }, 250);
+  if (silent) return;
+  if (view === 'type' && T) { if (!T.started && !T.done) newRound(); else renderKbLabels(); }
+  else if (view === 'stats') renderStats();
+}
+function segCtl(id, opts, cur, onPick, styleFn) {
+  const el = $('#' + id);
+  el.innerHTML = Object.entries(opts).map(([k, v]) =>
+    `<button type="button" data-k="${k}" class="${String(k) === String(cur) ? 'active' : ''}"${styleFn ? ` style="${styleFn(k)}"` : ''}>${Array.isArray(v) ? v[0] : v}</button>`).join('');
+  el.onclick = e => {
+    const b = e.target.closest('button'); if (!b) return;
+    el.querySelectorAll('button').forEach(x => x.classList.toggle('active', x === b));
+    onPick(b.dataset.k); save();
+  };
+}
+function switchCtl(id, get, set) {
+  const el = $('#' + id); el.checked = get();
+  el.onchange = () => { set(el.checked); save(); };
+}
+function renderPreview() {
+  const ar = S.lang === 'ar', txt = ar ? 'الكتابة السريعة متعة' : 'Typing fast is fun', done = ar ? 6 : 5;
+  const pv = $('#preview');
+  pv.dir = ar ? 'rtl' : 'ltr'; pv.className = 'preview text ' + S.lang;
+  pv.innerHTML = [...txt].map((c, i) => `<span class="ch ${i < done ? 'ok' : i === done ? 'bad' : ''}">${c}</span>`).join('') ;
+  const sp = pv.children[done + 1], cr = document.createElement('i'); cr.className = 'caret idle';
+  pv.appendChild(cr);
+  requestAnimationFrame(() => {
+    const l = sp.offsetLeft, w = sp.offsetWidth, cs = S.settings.caret;
+    const x = ar ? l + w : l;
+    if (cs === 'line') { cr.style.height = sp.offsetHeight + 'px'; cr.style.transform = `translate(${x - 1}px,${sp.offsetTop}px)`; }
+    else {
+      cr.style.width = w + 'px';
+      cr.style.height = cs === 'block' ? sp.offsetHeight + 'px' : '3px';
+      cr.style.transform = `translate(${l}px,${sp.offsetTop + (cs === 'block' ? 0 : sp.offsetHeight - 3)}px)`;
+    }
+  });
+}
+function buildSettings() {
+  const st = S.settings, look = () => { applyAppearance(); renderPreview(); };
+  $('#swatches').innerHTML = Object.entries(SKINS).map(([k, s]) =>
+    `<button type="button" class="swatch ${k === S.skin ? 'active' : ''}" data-k="${k}" style="--sb:${s.bg};--sa:${s.ac};--st:${s.tx}" aria-label="${s.name}"><i><b></b></i><span>${s.name}</span></button>`).join('');
+  $('#swatches').onclick = e => {
+    const b = e.target.closest('.swatch'); if (!b) return;
+    S.skin = b.dataset.k; save(); look();
+    $$('#swatches .swatch').forEach(x => x.classList.toggle('active', x === b));
+  };
+  segCtl('fontAr', FONTS_AR, st.fontAr, k => { st.fontAr = k; look(); }, k => `font-family:${FONTS_AR[k][1].replace(/"/g, "'")}`);
+  segCtl('fontEn', FONTS_EN, st.fontEn, k => { st.fontEn = k; look(); }, k => `font-family:${FONTS_EN[k][1].replace(/"/g, "'")}`);
+  segCtl('fontSize', SIZES, st.size, k => { st.size = k; look(); });
+  segCtl('caretStyle', CARETS, st.caret, k => { st.caret = k; look(); });
+  switchCtl('setSmooth', () => st.smooth, v => { st.smooth = v; look(); });
+  segCtl('setLength', LENGTHS, st.length, k => { st.length = +k; });
+  segCtl('setGhost', GHOSTS, st.ghost, k => { st.ghost = k; });
+  $('#setTarget').value = P().target;
+  $('#setTarget').onchange = () => { P().target = clamp(Math.round(+$('#setTarget').value || 25), 10, 150); $('#setTarget').value = P().target; save(); };
+  $('#tgtMinus').onclick = () => { $('#setTarget').value = +$('#setTarget').value - 5; $('#setTarget').onchange(); };
+  $('#tgtPlus').onclick = () => { $('#setTarget').value = +$('#setTarget').value + 5; $('#setTarget').onchange(); };
+  switchCtl('setStop', () => st.stopOnError, v => st.stopOnError = v);
+  switchCtl('setLenient', () => st.lenient, v => st.lenient = v);
+  switchCtl('setKb', () => st.keyboard, v => st.keyboard = v);
+  switchCtl('setFingers', () => st.fingers, v => st.fingers = v);
+  switchCtl('setCombo', () => st.combo, v => { st.combo = v; applyAppearance(); });
+  switchCtl('setFx', () => st.fx, v => { st.fx = v; if (v) burst(60); });
+  switchCtl('setSound', () => S.sound, v => { S.sound = v; applySound(); if (v) sound('ok'); });
+  const vol = $('#setVol'); vol.value = st.volume;
+  vol.oninput = () => { st.volume = +vol.value; save(); };
+  vol.onchange = () => sound('ok');
+  $('#drLang').textContent = S.lang === 'ar' ? 'العربي' : 'الإنجليزي';
+  renderPreview();
+}
+
+/* ================= Effects ================= */
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+function countUp(el) {
+  const to = +el.dataset.to, suf = el.dataset.suf || '';
+  if (reduced) { el.textContent = to + suf; return; }
+  const t0 = performance.now(), d = 850;
+  const f = now => {
+    const k = Math.min(1, (now - t0) / d), e = 1 - Math.pow(1 - k, 3);
+    el.textContent = Math.round(to * e) + suf;
+    if (k < 1) requestAnimationFrame(f);
+  };
+  requestAnimationFrame(f);
+}
+const fx = $('#fx'), fctx = fx.getContext('2d');
+let parts = [], fxRun = false;
+function burst(n = 120) {
+  if (!S.settings.fx || reduced) return;
+  const dpr = window.devicePixelRatio || 1;
+  fx.width = innerWidth * dpr; fx.height = innerHeight * dpr; fctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const cs = getComputedStyle(document.documentElement);
+  const cols = ['--accent', '--good', '--f4', '--f5', '--f0', '--f2'].map(v => cs.getPropertyValue(v).trim()).filter(Boolean);
+  for (let i = 0; i < n; i++) {
+    const side = i % 2;
+    parts.push({ x: innerWidth * (side ? 0.12 : 0.88), y: innerHeight * 0.4, vx: (side ? 1 : -1) * (2 + Math.random() * 7), vy: -5 - Math.random() * 9,
+      life: 80 + Math.random() * 60, c: pick(cols), s: 5 + Math.random() * 6, r: Math.random() * 6, vr: (Math.random() - 0.5) * 0.35 });
+  }
+  if (!fxRun) { fxRun = true; requestAnimationFrame(stepFx); }
+}
+function stepFx() {
+  fctx.clearRect(0, 0, innerWidth, innerHeight);
+  parts = parts.filter(p => p.life-- > 0);
+  for (const p of parts) {
+    p.vy += 0.22; p.vx *= 0.99; p.x += p.vx; p.y += p.vy; p.r += p.vr;
+    fctx.save(); fctx.globalAlpha = Math.min(1, p.life / 30); fctx.translate(p.x, p.y); fctx.rotate(p.r);
+    fctx.fillStyle = p.c; fctx.fillRect(-p.s / 2, -p.s / 3, p.s, p.s * 0.66); fctx.restore();
+  }
+  if (parts.length) requestAnimationFrame(stepFx); else { fxRun = false; fctx.clearRect(0, 0, innerWidth, innerHeight); }
+}
+function updateCombo(broke) {
+  const box = $('#comboBox'), el = $('#liveCombo'); if (!T) return;
+  el.textContent = T.combo;
+  box.dataset.tier = T.combo >= 50 ? 3 : T.combo >= 25 ? 2 : T.combo >= 10 ? 1 : 0;
+  if (reduced) return;
+  if (broke) { box.classList.remove('break'); void box.offsetWidth; box.classList.add('break'); }
+  else if (T.combo && T.combo % 10 === 0) { box.classList.remove('pop'); void box.offsetWidth; box.classList.add('pop'); }
+}
+
 function applySound() { $('#soundBtn').textContent = S.sound ? '🔊' : '🔇'; }
 let toastT = 0, lastHint = 0;
 function toast(msg) { const t = $('#toast'); t.innerHTML = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, 3500); }
@@ -780,9 +1049,8 @@ function translate(ch, e) {
 }
 
 /* ================= Input ================= */
-const dlg = $('#settings');
 document.addEventListener('keydown', e => {
-  if (dlg.open) return;
+  if (drawerOpen()) { if (e.key === 'Escape') closeDrawer(); return; }
   if (view === 'welcome') { if (e.key === 'Enter') { e.preventDefault(); startPlacement(); } return; }
   if (view !== 'type' || !T) return;
   pressKey(e.code);
@@ -810,23 +1078,11 @@ function setLang(l) {
 }
 $$('#langSeg button').forEach(b => b.onclick = () => { b.blur(); setLang(b.dataset.lang); });
 $('#soundBtn').onclick = e => { S.sound = !S.sound; applySound(); save(); e.currentTarget.blur(); };
-$('#themeBtn').onclick = e => { S.theme = S.theme === 'dark' ? 'light' : 'dark'; applyTheme(); save(); e.currentTarget.blur(); };
-$('#settingsBtn').onclick = () => {
-  $('#setLength').value = S.settings.length; $('#setTarget').value = P().target;
-  $('#setStop').checked = S.settings.stopOnError; $('#setLenient').checked = S.settings.lenient;
-  $('#setKb').checked = S.settings.keyboard; $('#setFingers').checked = S.settings.fingers;
-  dlg.showModal();
-};
-dlg.addEventListener('close', () => {
-  S.settings.length = +$('#setLength').value;
-  P().target = clamp(+$('#setTarget').value || 25, 10, 150);
-  S.settings.stopOnError = $('#setStop').checked; S.settings.lenient = $('#setLenient').checked;
-  S.settings.keyboard = $('#setKb').checked; S.settings.fingers = $('#setFingers').checked;
-  save();
-  if (view === 'type') { if (!T || !T.started || T.done) newRound(); else renderKbLabels(); }
-  else if (view === 'stats') renderStats();
-});
-$('#redoPlacement').onclick = () => { dlg.close(); startPlacement(); };
+$('#themeBtn').onclick = e => { S.skin = SKINS[S.skin].base === 'dark' ? 'sand' : 'night'; applyAppearance(); save(); e.currentTarget.blur(); };
+$('#settingsBtn').onclick = e => { e.currentTarget.blur(); openDrawer(); };
+$('#drClose').onclick = () => closeDrawer();
+scrim.onclick = () => closeDrawer();
+$('#redoPlacement').onclick = () => { closeDrawer(true); startPlacement(); };
 let resetArmed = 0;
 $('#resetLang').onclick = e => {
   const b = e.currentTarget;
@@ -837,7 +1093,7 @@ $('#resetLang').onclick = e => {
     return;
   }
   resetArmed = 0; b.textContent = 'مسح بيانات هذه اللغة';
-  S.profiles[S.lang] = newProfile(); save(); dlg.close(); go('practice');
+  S.profiles[S.lang] = newProfile(); save(); closeDrawer(true); go('practice');
 };
 
 /* لما تفقد الصفحة التركيز (مثلاً داخل إطار) نطلب نقرة قبل الكتابة */
@@ -851,7 +1107,7 @@ if (!document.hasFocus()) document.body.classList.add('unfocused');
 
 /* ================= Boot ================= */
 kbKeys = buildKeyboard($('#kb'));
-applyTheme(); applySound();
+applyAppearance(); applySound();
 $$('#langSeg button').forEach(b => b.classList.toggle('active', b.dataset.lang === S.lang));
 go('practice');
 })();

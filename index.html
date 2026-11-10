@@ -7,7 +7,7 @@
 <meta name="description" content="مدرّب كتابة سريعة بالعربية والإنجليزية: اختبار تحديد مستوى ودروس تتكيف مع أخطائك.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Cairo:wght@500;600&family=Tajawal:wght@500;700&family=Amiri:wght@400;700&family=IBM+Plex+Mono:wght@400;500&family=Source+Code+Pro:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -45,6 +45,8 @@
       <div class="stat"><b id="liveWpm">0</b><span>كلمة/دقيقة</span></div>
       <div class="stat"><b id="liveAcc">100%</b><span>الدقة</span></div>
       <div class="stat"><b id="liveTime">0:00</b><span id="timeLbl">الوقت</span></div>
+      <div class="stat combo" id="comboBox" data-tier="0"><b id="liveCombo">0</b><span>🔥 سلسلة</span></div>
+      <div class="stat ghoststat" id="ghostBox" hidden><b id="liveGhost">0</b><span id="ghostLbl">👻 الشبح</span></div>
       <div class="badges">
         <span class="badge warn" id="capsWarn" hidden>⇪ Caps Lock مفعّل</span>
       </div>
@@ -67,30 +69,55 @@
   </section>
 </main>
 
-<dialog id="settings">
-  <form method="dialog" class="dlg">
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" aria-hidden="true" aria-label="الإعدادات">
+  <div class="dr-head">
     <h2>الإعدادات</h2>
-    <label class="row">طول الدرس
-      <select id="setLength">
-        <option value="15">قصير (15 كلمة)</option>
-        <option value="25">متوسط (25 كلمة)</option>
-        <option value="40">طويل (40 كلمة)</option>
-      </select>
-    </label>
-    <label class="row">السرعة المستهدفة لفتح حروف جديدة (كلمة/دقيقة)
-      <input type="number" id="setTarget" min="10" max="150" step="5">
-    </label>
-    <label class="check"><input type="checkbox" id="setStop"> التوقف عند الخطأ (لازم تكتب الحرف الصح لتكمل)</label>
-    <label class="check"><input type="checkbox" id="setLenient"> التساهل في الهمزات (ا = أ = إ = آ)</label>
-    <label class="check"><input type="checkbox" id="setKb"> إظهار لوحة المفاتيح</label>
-    <label class="check"><input type="checkbox" id="setFingers"> تلوين المفاتيح حسب الأصابع</label>
-    <div class="dlg-actions">
-      <button type="button" class="btn ghost" id="redoPlacement">إعادة اختبار تحديد المستوى</button>
-      <button type="button" class="btn danger" id="resetLang">مسح بيانات هذه اللغة</button>
-      <button class="btn primary" value="close">تم</button>
-    </div>
-  </form>
-</dialog>
+    <button class="icon" id="drClose" title="إغلاق (Esc)">✕</button>
+  </div>
+  <div class="dr-body">
+    <section class="dr-sec">
+      <h3>🎨 المظهر</h3>
+      <div class="swatches" id="swatches"></div>
+      <div class="preview-wrap"><div class="preview" id="preview"></div></div>
+      <div class="field"><span>خط النص العربي</span><div class="seg wrap" id="fontAr"></div></div>
+      <div class="field"><span>خط النص الإنجليزي</span><div class="seg wrap" id="fontEn"></div></div>
+      <div class="field"><span>حجم النص</span><div class="seg wrap" id="fontSize"></div></div>
+      <div class="field"><span>شكل المؤشر</span><div class="seg wrap" id="caretStyle"></div></div>
+      <label class="sw"><input type="checkbox" id="setSmooth"><i></i><span>حركة المؤشر ناعمة</span></label>
+    </section>
+    <section class="dr-sec">
+      <h3>🎯 التدريب</h3>
+      <div class="field"><span>طول الدرس</span><div class="seg wrap" id="setLength"></div></div>
+      <div class="field"><span>👻 الشبح يسابقك بسرعة</span><div class="seg wrap" id="setGhost"></div></div>
+      <div class="field"><span>السرعة المستهدفة لفتح حروف جديدة · <b id="drLang"></b></span>
+        <div class="stepper"><button type="button" id="tgtMinus">−</button><input type="number" id="setTarget" min="10" max="150" step="5"><button type="button" id="tgtPlus">+</button><small>ك/د</small></div>
+      </div>
+      <label class="sw"><input type="checkbox" id="setStop"><i></i><span>التوقف عند الخطأ<small>لازم تكتب الحرف الصح لتكمل</small></span></label>
+      <label class="sw"><input type="checkbox" id="setLenient"><i></i><span>التساهل في الهمزات<small>ا = أ = إ = آ</small></span></label>
+    </section>
+    <section class="dr-sec">
+      <h3>✨ المساعدة والتأثيرات</h3>
+      <label class="sw"><input type="checkbox" id="setKb"><i></i><span>إظهار لوحة المفاتيح</span></label>
+      <label class="sw"><input type="checkbox" id="setFingers"><i></i><span>تلوين المفاتيح حسب الأصابع</span></label>
+      <label class="sw"><input type="checkbox" id="setCombo"><i></i><span>عدّاد السلسلة 🔥<small>بيكبر مع كل حرف صح ورا بعض</small></span></label>
+      <label class="sw"><input type="checkbox" id="setFx"><i></i><span>احتفالات وقصاصات ملوّنة 🎉</span></label>
+    </section>
+    <section class="dr-sec">
+      <h3>🔊 الصوت</h3>
+      <label class="sw"><input type="checkbox" id="setSound"><i></i><span>صوت الضغطات</span></label>
+      <div class="field"><span>مستوى الصوت</span><input type="range" id="setVol" min="0" max="1" step="0.05"></div>
+    </section>
+    <section class="dr-sec">
+      <h3>🗂 البيانات</h3>
+      <div class="dr-actions">
+        <button type="button" class="btn ghost" id="redoPlacement">إعادة اختبار تحديد المستوى</button>
+        <button type="button" class="btn danger" id="resetLang">مسح بيانات هذه اللغة</button>
+      </div>
+    </section>
+  </div>
+</aside>
+<canvas id="fx" aria-hidden="true"></canvas>
 
 <div class="toast" id="toast" hidden></div>
 
