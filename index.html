@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ar" dir="rtl" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>أنامل — تعلّم الكتابة السريعة</title>
+<meta name="description" content="مدرّب كتابة سريعة بالعربية والإنجليزية: اختبار تحديد مستوى ودروس تتكيف مع أخطائك.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="logo">أ</span>
+    <div><b>أنامل</b><small>كتابة سريعة · عربي و English</small></div>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button data-tab="practice">🎯 تدريب</button>
+    <button data-tab="test">⏱ اختبار سرعة</button>
+    <button data-tab="stats">📈 إحصائياتي</button>
+  </nav>
+  <div class="controls">
+    <div class="seg" id="langSeg">
+      <button data-lang="ar">عربي</button>
+      <button data-lang="en">English</button>
+    </div>
+    <button class="icon" id="soundBtn" title="الصوت"></button>
+    <button class="icon" id="themeBtn" title="الوضع الليلي/النهاري">◐</button>
+    <button class="icon" id="settingsBtn" title="الإعدادات">⚙</button>
+  </div>
+</header>
+
+<main>
+  <section class="view" id="view-welcome" hidden>
+    <div id="welcomeBody"></div>
+  </section>
+
+  <section class="view" id="view-type" hidden>
+    <div class="mode-bar" id="modeBar"></div>
+
+    <div class="live">
+      <div class="stat"><b id="liveWpm">0</b><span>كلمة/دقيقة</span></div>
+      <div class="stat"><b id="liveAcc">100%</b><span>الدقة</span></div>
+      <div class="stat"><b id="liveTime">0:00</b><span id="timeLbl">الوقت</span></div>
+      <div class="badges">
+        <span class="badge warn" id="capsWarn" hidden>⇪ Caps Lock مفعّل</span>
+      </div>
+      <div class="prog"><i id="prog"></i></div>
+    </div>
+
+    <div class="board" id="board">
+      <div class="text-wrap" id="textWrap"><div class="text" id="text"></div></div>
+      <div class="start-hint" id="startHint">ابدأ الكتابة — المؤقّت يبدأ مع أول حرف</div>
+    </div>
+    <div class="result" id="result" hidden></div>
+
+    <div class="shortcuts"><kbd>Tab</kbd> إعادة &nbsp;·&nbsp; <kbd>Esc</kbd> درس جديد &nbsp;·&nbsp; <kbd>Ctrl</kbd>+<kbd>⌫</kbd> حذف كلمة &nbsp;·&nbsp; <kbd>Enter</kbd> التالي بعد النتيجة</div>
+    <div class="kb" id="kb"></div>
+    <div class="finger" id="finger"></div>
+  </section>
+
+  <section class="view" id="view-stats" hidden>
+    <div id="statsBody"></div>
+  </section>
+</main>
+
+<dialog id="settings">
+  <form method="dialog" class="dlg">
+    <h2>الإعدادات</h2>
+    <label class="row">طول الدرس
+      <select id="setLength">
+        <option value="15">قصير (15 كلمة)</option>
+        <option value="25">متوسط (25 كلمة)</option>
+        <option value="40">طويل (40 كلمة)</option>
+      </select>
+    </label>
+    <label class="row">السرعة المستهدفة لفتح حروف جديدة (كلمة/دقيقة)
+      <input type="number" id="setTarget" min="10" max="150" step="5">
+    </label>
+    <label class="check"><input type="checkbox" id="setStop"> التوقف عند الخطأ (لازم تكتب الحرف الصح لتكمل)</label>
+    <label class="check"><input type="checkbox" id="setLenient"> التساهل في الهمزات (ا = أ = إ = آ)</label>
+    <label class="check"><input type="checkbox" id="setKb"> إظهار لوحة المفاتيح</label>
+    <label class="check"><input type="checkbox" id="setFingers"> تلوين المفاتيح حسب الأصابع</label>
+    <div class="dlg-actions">
+      <button type="button" class="btn ghost" id="redoPlacement">إعادة اختبار تحديد المستوى</button>
+      <button type="button" class="btn danger" id="resetLang">مسح بيانات هذه اللغة</button>
+      <button class="btn primary" value="close">تم</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="words.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
