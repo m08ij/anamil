@@ -457,3 +457,106 @@ dialog::backdrop{background:rgba(0,0,0,.55);backdrop-filter:blur(3px)}
   .live{gap:18px}
   .r-num b{font-size:42px}
 }
+
+/* ---------- mode toggles (metronome / no-look) ---------- */
+.mods{display:flex;gap:6px}
+.mod{border:1px solid var(--line);background:var(--surface);color:var(--muted);padding:6px 12px;border-radius:999px;font-size:13px;transition:.15s}
+.mod small{font-family:"JetBrains Mono",monospace;opacity:.7}
+.mod:hover{color:var(--text)}
+.mod.on{background:var(--accent-soft);color:var(--accent);border-color:color-mix(in srgb,var(--accent) 45%,transparent)}
+.metro b{display:grid;place-items:center;height:30px}
+#metroDot{display:block;width:14px;height:14px;border-radius:50%;background:var(--accent);opacity:.35}
+#metroDot.beat{animation:beat .28s ease-out}
+@keyframes beat{0%{transform:scale(1.7);opacity:1;box-shadow:0 0 0 6px var(--accent-soft)}100%{transform:scale(1);opacity:.35}}
+
+/* ---------- no-look: النص البعيد مغبّش ---------- */
+.board.nolook .ch:not(.ok):not(.bad):not(.fixed):not(.near){color:transparent;text-shadow:0 0 .32em color-mix(in srgb,var(--dim) 70%,transparent)}
+.board.nolook .ch.near{color:var(--muted)}
+
+/* ---------- code ---------- */
+.text.code{white-space:pre-wrap;direction:ltr}
+.text.code .w{white-space:pre}
+.ch.nl{color:var(--dim);opacity:.6;font-size:.8em}
+.ch.nl.ok{color:var(--good);opacity:.5}
+
+/* ---------- achievements ---------- */
+.ach-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}
+.ach{background:var(--bg2);border:1px solid var(--line);border-radius:14px;padding:14px 10px;display:flex;flex-direction:column;align-items:center;gap:4px;text-align:center;filter:grayscale(1);opacity:.55;transition:.2s}
+.ach b{font-size:30px;line-height:1.2}
+.ach span{font-weight:600;font-size:13px}
+.ach small{font-size:11px;color:var(--muted);line-height:1.4}
+.ach.got{filter:none;opacity:1;border-color:color-mix(in srgb,var(--accent) 45%,var(--line));background:linear-gradient(160deg,var(--accent-soft),var(--bg2) 60%)}
+.ach.got:hover{transform:translateY(-3px)}
+.ach-toast{display:flex;align-items:center;gap:12px;text-align:start}
+.ach-toast b{font-size:32px}
+.ach-toast strong{color:var(--accent)}
+.s-head .spacer{flex:1}
+
+/* ---------- falling words game ---------- */
+.game-hud{display:flex;align-items:flex-end;gap:26px;margin:14px 4px 12px;flex-wrap:wrap}
+.game-hud #gLives{font-size:22px;letter-spacing:2px}
+.g-buf{font-family:var(--font-en,"JetBrains Mono"),var(--font-ar,"IBM Plex Sans Arabic"),sans-serif;font-size:22px;color:var(--accent);min-height:30px;padding:2px 14px;border-radius:10px;background:var(--accent-soft)}
+.g-buf:empty{background:none}
+.arena{
+  position:relative;height:min(62vh,520px);border-radius:var(--r);overflow:hidden;border:1px solid var(--line);
+  background:
+    radial-gradient(600px 300px at 50% 110%,var(--accent-soft),transparent 70%),
+    repeating-linear-gradient(0deg,transparent 0 47px,color-mix(in srgb,var(--line) 45%,transparent) 47px 48px),
+    var(--surface);
+  touch-action:manipulation
+}
+.arena.hit{animation:arenaHit .4s}
+@keyframes arenaHit{30%{box-shadow:inset 0 0 0 3px var(--bad),inset 0 -60px 60px -30px color-mix(in srgb,var(--bad) 40%,transparent)}}
+.ground{position:absolute;left:0;right:0;bottom:0;height:40px;background:linear-gradient(to top,color-mix(in srgb,var(--bad) 18%,transparent),transparent);border-top:2px dashed color-mix(in srgb,var(--bad) 45%,transparent)}
+.fw{
+  position:absolute;left:0;top:0;padding:4px 12px;border-radius:10px;background:var(--surface2);border:1px solid var(--line);
+  font-size:24px;font-weight:600;white-space:nowrap;color:var(--text);box-shadow:0 6px 18px -10px rgba(0,0,0,.5);will-change:transform
+}
+.fw.ar{font-family:var(--font-ar,"IBM Plex Sans Arabic"),sans-serif}
+.fw.en{font-family:var(--font-en,"JetBrains Mono"),monospace}
+.fw .gt{color:var(--accent)}
+.fw.locked{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft),0 6px 18px -10px rgba(0,0,0,.5);z-index:2}
+.fw.danger{border-color:color-mix(in srgb,var(--bad) 60%,var(--line))}
+.fw.shake{animation:fwShake .25s}
+@keyframes fwShake{25%{margin-left:-5px}75%{margin-left:5px}}
+.fw.boom{animation:boom .45s ease-out forwards}
+@keyframes boom{to{opacity:0;scale:1.6;filter:blur(2px)}}
+.fw.miss{animation:fwMiss .45s forwards}
+@keyframes fwMiss{to{opacity:0;background:var(--bad);color:#fff}}
+.pts{position:absolute;left:0;top:0;font:700 20px "JetBrains Mono",monospace;color:var(--good);pointer-events:none;animation:pts .8s ease-out forwards}
+@keyframes pts{to{opacity:0;margin-top:-50px}}
+.lvl-up{position:absolute;inset:0;display:grid;place-items:center;font-size:44px;font-weight:700;color:var(--accent);pointer-events:none;animation:lvl 1.3s ease-out forwards;text-shadow:0 0 30px var(--accent-soft)}
+@keyframes lvl{0%{opacity:0;scale:.6}20%{opacity:1;scale:1.1}70%{opacity:1;scale:1}100%{opacity:0;scale:1.2}}
+.g-overlay{position:absolute;inset:0;display:grid;place-items:center;background:color-mix(in srgb,var(--surface) 72%,transparent);backdrop-filter:blur(4px);z-index:5;padding:16px}
+.g-card{text-align:center;max-width:520px;display:flex;flex-direction:column;align-items:center;gap:6px;animation:pop .3s}
+.g-card h2{margin:4px 0}
+.g-card p{margin:0;color:var(--muted);line-height:1.8}
+.g-card .btn{margin-top:12px}
+.g-emoji{font-size:54px}
+.g-nums{justify-content:center;gap:22px;margin:8px 0}
+.g-nums .r-num b{font-size:40px}
+.g-nums .r-num.sm b{font-size:22px;margin-top:14px}
+
+/* ---------- mobile ---------- */
+.mobile-input{position:fixed;left:0;bottom:0;width:1px;height:1px;opacity:0;border:0;padding:0;font-size:16px;pointer-events:none}
+.tap-hint{display:none;text-align:center;margin-top:10px;font-size:14px;color:var(--accent);font-weight:600}
+body.touch:not(.mi-on) .tap-hint{display:block;animation:tapPulse 1.8s ease-in-out infinite}
+@keyframes tapPulse{50%{opacity:.55}}
+@media (max-width:760px){.metro b{height:auto}.metro #metroDot{width:10px;height:10px;margin:8px auto}}
+body.touch .focus-veil{display:none}
+.icon.install{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+@media (max-width:760px){
+  .top{gap:10px}
+  .tabs{overflow-x:auto;flex-wrap:nowrap;justify-content:flex-start;scrollbar-width:none;border-radius:14px}
+  .tabs::-webkit-scrollbar{display:none}
+  .tabs button{white-space:nowrap;padding:8px 12px;flex:none}
+  .stat b{font-size:24px}
+  .live{gap:14px}
+  .shortcuts{display:none}
+  .mode-bar{gap:8px}
+  .mods{width:100%}
+  .arena{height:56vh}
+  .fw{font-size:20px}
+  .game-hud{gap:16px}
+  .drawer{width:100vw}
+}

@@ -37,6 +37,7 @@ for (const l of ['en', 'ar']) for (const [code, [n, s]] of Object.entries(LAYOUT
   if ([...n].length === 1 && !REV[l][n]) REV[l][n] = { code, shift: false };
   if (s && [...s].length === 1 && !REV[l][s]) REV[l][s] = { code, shift: true };
 }
+REV.en['\n'] = { code: 'Enter', shift: false };
 const FINGER = {};
 [
   ['Backquote','Digit1','Tab','KeyQ','CapsLock','KeyA','ShiftLeft','KeyZ'],
@@ -75,18 +76,30 @@ for (const l of ['en', 'ar']) {
 
 /* ================= State ================= */
 const STORE = 'anamil-v1';
-const newProfile = () => ({ placed: false, placement: null, keys: {}, history: [], tests: [], sentHist: [], seenSent: [], errorWords: {}, conf: {}, bi: {}, unlocked: 6, sinceUnlock: 0, target: 25, totalMs: 0 });
+const newProfile = () => ({ placed: false, placement: null, keys: {}, history: [], tests: [], sentHist: [], codeHist: [], drillHist: [], games: [], gameBest: 0,
+  seenSent: [], errorWords: {}, conf: {}, bi: {}, unlocked: 6, sinceUnlock: 0, target: 25, totalMs: 0 });
+const TOUCH = matchMedia('(pointer: coarse)').matches;
 let S = null;
 try { S = JSON.parse(localStorage.getItem(STORE)); } catch (e) {}
 if (!S || typeof S !== 'object') S = {};
 S.lang = S.lang || 'ar';
 S.theme = S.theme || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
 if (S.sound === undefined) S.sound = true;
-S.settings = Object.assign({ length: 25, stopOnError: false, lenient: true, keyboard: true, fingers: true, testDur: 60,
-  ghost: 'best', combo: true, fx: true, fontAr: 'plex', fontEn: 'jet', size: 'm', caret: 'line', smooth: true, volume: 0.6 }, S.settings);
+const firstRun = !S.settings;
+S.settings = Object.assign({ length: 25, stopOnError: false, lenient: true, keyboard: !TOUCH, fingers: true, testDur: 60,
+  ghost: 'best', combo: true, fx: true, fontAr: 'plex', fontEn: 'jet', size: 'm', caret: 'line', smooth: true, volume: 0.6,
+  soundPack: 'soft', metro: false, metroCpm: 'auto', nolook: false, codeLang: 'js' }, S.settings);
+if (firstRun && TOUCH) S.settings.keyboard = false;
+S.ach = S.ach || {};
+S.counts = Object.assign({ ghostWins: 0, sentences: 0, code: 0, drills: 0, games: 0 }, S.counts);
 S.profiles = S.profiles || {};
 for (const l of ['ar', 'en']) S.profiles[l] = Object.assign(newProfile(), S.profiles[l]);
-const save = () => { try { localStorage.setItem(STORE, JSON.stringify(S)); } catch (e) {} };
+const save = () => {
+  // وضع الكود بيحوّل اللغة للإنجليزي مؤقتاً، فبنحفظ اللغة الأصلية
+  const cur = S.lang; if (typeof codePrevLang !== 'undefined' && codePrevLang) S.lang = codePrevLang;
+  try { localStorage.setItem(STORE, JSON.stringify(S)); } catch (e) {}
+  S.lang = cur;
+};
 const P = () => S.profiles[S.lang];
 
 let view = 'type', tab = 'practice', mode = 'practice', T = null;
@@ -280,13 +293,15 @@ function recordKey(k, ok, dt) {
 /* ================= Rendering the text ================= */
 function calcWordOf() {
   let wi = 0; T.wordOf = [];
-  for (let i = 0; i < T.text.length; i++) { T.wordOf[i] = wi; if (T.text[i] === ' ') wi++; }
+  for (let i = 0; i < T.text.length; i++) { T.wordOf[i] = wi; if (T.text[i] === ' ' || T.text[i] === '\n') wi++; }
 }
+const baseCls = c => c === ' ' ? 'ch sp' : c === '\n' ? 'ch nl' : 'ch';
 function appendText(str) {
   const frag = document.createDocumentFragment(); let word = null;
   for (const c of str) {
-    const sp = document.createElement('span'); sp.className = c === ' ' ? 'ch sp' : 'ch'; sp.textContent = c;
-    if (c === ' ') { word = null; frag.appendChild(sp); }
+    const sp = document.createElement('span'); sp.className = baseCls(c); sp.textContent = c === '\n' ? '↵' : c;
+    if (c === '\n') { word = null; frag.appendChild(sp); frag.appendChild(document.createTextNode('\n')); }
+    else if (c === ' ') { word = null; frag.appendChild(sp); }
     else { if (!word) { word = document.createElement('span'); word.className = 'w'; frag.appendChild(word); } word.appendChild(sp); }
     spans.push(sp);
   }
@@ -296,8 +311,10 @@ function renderText() {
   textEl.innerHTML = ''; spans = [];
   const rtl = S.lang === 'ar';
   textEl.dir = rtl ? 'rtl' : 'ltr';
-  textEl.className = 'text ' + S.lang;
+  textEl.className = 'text ' + S.lang + (mode === 'code' ? ' code' : '');
   wrapEl.className = 'text-wrap ' + S.lang;
+  board.classList.toggle('nolook', !!S.settings.nolook && mode !== 'placement');
+  nearFrom = 0; nearTo = 0;
   caret = document.createElement('i'); caret.className = 'caret idle'; textEl.appendChild(caret);
   ghostEl = document.createElement('i'); ghostEl.className = 'ghost-caret'; ghostEl.hidden = true; textEl.appendChild(ghostEl);
   appendText(T.text);
@@ -334,7 +351,7 @@ function ghostRef() {
   const g = S.settings.ghost, p = P();
   if (g === 'off' || mode === 'placement') return 0;
   if (g === 'target') return p.target;
-  const list = mode === 'practice' ? p.history : mode === 'sentences' ? p.sentHist : p.tests.filter(t => t.dur === S.settings.testDur && !t.placement);
+  const list = histFor(mode) || p.tests.filter(t => t.dur === S.settings.testDur && !t.placement);
   const recent = list.slice(-30);
   if (!recent.length) return 0;
   if (g === 'best') return Math.max(...recent.map(x => x.wpm));
@@ -374,34 +391,73 @@ function weakBigrams(k = 8, set = null) {
 }
 
 /* ================= Round lifecycle ================= */
+function histFor(m) {
+  const p = P();
+  return { practice: p.history, sentences: p.sentHist, code: p.codeHist, drill: p.drillHist }[m] || null;
+}
 function newRound(reuse) {
-  stopTicker();
-  let words, focus = [], review = [], drill = null, bigrams = [];
+  stopTicker(); stopMetro();
+  let words, focus = [], review = [], drill = null, bigrams = [], text = null, snippet = null;
   if (mode === 'practice' || mode === 'sentences') {
     const L = reuse || (mode === 'practice' ? makeLesson() : makeSentences()); words = L.words; focus = L.focus; review = L.review || []; drill = L.drill || null; bigrams = L.bigrams || [];
+  } else if (mode === 'code') {
+    const L = reuse || makeCode(); text = L.text; snippet = L.snippet; words = text.split(/[ \n]+/);
+  } else if (mode === 'drill') {
+    const L = reuse || makeDrill(); words = L.words; focus = L.focus;
   } else words = reuse ? reuse.words : randomWords(mode === 'test' ? Math.max(60, S.settings.testDur * 2) : 120);
   T = {
-    words: [...words], focus, review, drill, bigrams, conf: {}, confHinted: false, combo: 0, bestCombo: 0, ghostWpm: ghostRef(), text: words.join(' '), pos: 0, marks: [], correct: 0, keys: 0, errors: 0,
+    words: [...words], focus, review, drill, bigrams, snippet, conf: {}, confHinted: false, combo: 0, bestCombo: 0, ghostWpm: ghostRef(),
+    text: text || words.join(' '), pos: 0, marks: [], correct: 0, keys: 0, errors: 0, iv: [],
     started: false, done: false, t0: 0, last: 0, wordErr: new Set(), sk: {}, samples: [], wordOf: [],
-    duration: mode === 'test' ? S.settings.testDur : mode === 'placement' ? 60 : 0
+    duration: mode === 'test' ? S.settings.testDur : (mode === 'placement' || mode === 'drill') ? 60 : 0
   };
   calcWordOf();
-  renderText(); renderModeBar(); renderKbLabels(); updateLive(); updateCombo(); updateGhost();
+  renderText(); renderModeBar(); renderKbLabels(); updateLive(); updateCombo(); updateGhost(); updateNear();
   $('#result').hidden = true; board.hidden = false; board.classList.remove('running');
   requestAnimationFrame(() => { measure(); placeCaret(); highlight(); });
 }
 function restart() {
   if (!T) return;
-  if ((mode === 'practice' || mode === 'sentences') && (T.started || T.done)) newRound({ words: T.words, focus: T.focus, review: T.review, drill: T.drill, bigrams: T.bigrams });
+  if (['practice', 'sentences', 'code', 'drill'].includes(mode) && (T.started || T.done))
+    newRound({ words: T.words, focus: T.focus, review: T.review, drill: T.drill, bigrams: T.bigrams, text: T.snippet ? T.text : null, snippet: T.snippet });
   else newRound();
 }
+
+/* ---------- كود ---------- */
+function makeCode() {
+  const lang = S.settings.codeLang === 'py' ? 'py' : 'js', list = CODE[lang];
+  S.seenCode = S.seenCode || [];
+  const fresh = list.map((_, i) => i).filter(i => !S.seenCode.includes(lang + i));
+  const i = fresh.length ? pick(fresh) : Math.floor(Math.random() * list.length);
+  S.seenCode = [...S.seenCode.filter(x => x !== lang + i), lang + i].slice(-Math.floor(list.length * 1.4));
+  return { text: list[i], snippet: lang + i };
+}
+/* ---------- تمرين الضعف: دقيقة على أضعف 3 حروف ---------- */
+function weakest3() {
+  const avg = avgTime(), letters = activeLetters();
+  const withData = letters.filter(k => { const s = keyStat(k); return s.h + s.m >= 8; });
+  return (withData.length >= 3 ? withData : letters).slice().sort((a, b) => weakness(b, avg) - weakness(a, avg)).slice(0, 3);
+}
+function drillWords(n, focus) {
+  const set = new Set(activeLetters());
+  const pool = WORDS[S.lang].filter(w => [...w].every(c => set.has(normU(c))));
+  const hits = pool.filter(w => focus.some(f => w.includes(f)));
+  const out = [];
+  while (out.length < n) {
+    const r = Math.random();
+    const w = hits.length >= 8 && r < 0.75 ? pick(hits) : r < 0.9 ? pseudo([...set], focus) : pick(pool.length ? pool : hits);
+    if (w && w !== out[out.length - 1]) out.push(w);
+  }
+  return out;
+}
+function makeDrill() { const focus = weakest3(); return { words: drillWords(90, focus), focus }; }
 function next() {
   if (T && T.retry) { newRound(); return; }
   if (mode === 'placement') { mode = 'practice'; }
   newRound();
 }
 function extendTest() {
-  const more = randomWords(40), add = ' ' + more.join(' ');
+  const more = mode === 'drill' ? drillWords(40, T.focus) : randomWords(40), add = ' ' + more.join(' ');
   T.words.push(...more); T.text += add; calcWordOf(); appendText(add);
 }
 
@@ -445,12 +501,13 @@ function typeChar(c) {
   if (!T || T.done) return;
   const now = performance.now();
   if (!T.started) {
-    T.started = true; T.t0 = now; T.last = now; startTicker();
+    T.started = true; T.t0 = now; T.last = now; startTicker(); startMetro();
     board.classList.add('running'); caret.classList.remove('idle');
   }
   const exp = T.text[T.pos], ok = same(c, exp), dt = now - T.last;
   T.last = now; T.keys++;
-  if (exp !== ' ') recordKey(exp, ok, T.pos > 0 ? dt : 0);
+  if (T.pos > 0 && ok && dt > 15 && dt < 2000) T.iv.push(dt);
+  if (exp !== ' ' && exp !== '\n') recordKey(exp, ok, T.pos > 0 ? dt : 0);
   const prevC = T.text[T.pos - 1];
   if (exp !== ' ' && prevC && prevC !== ' ' && T.marks[T.pos - 1] === true) recordBigram(prevC, exp, ok, dt);
   if (ok) { T.combo++; if (T.combo > T.bestCombo) T.bestCombo = T.combo; updateCombo(); }
@@ -462,30 +519,33 @@ function typeChar(c) {
       board.classList.remove('shake'); void board.offsetWidth; board.classList.add('shake');
       updateLive(); return;
     }
-  } else sound('ok');
+  } else sound(exp === ' ' || exp === '\n' ? 'space' : 'ok');
   const sp = spans[T.pos];
-  sp.className = 'ch' + (exp === ' ' ? ' sp' : '') + (ok ? (sp.classList.contains('miss') ? ' fixed' : ' ok') : ' bad');
+  sp.className = baseCls(exp) + (ok ? (sp.classList.contains('miss') ? ' fixed' : ' ok') : ' bad');
   T.marks[T.pos] = ok; if (ok) T.correct++;
   T.pos++;
+  // بعد سطر جديد بالكود، المسافات اللي بأول السطر بتنكتب لحالها
+  if (exp === '\n' && ok) while (T.text[T.pos] === ' ') { spans[T.pos].className = 'ch sp ok'; T.marks[T.pos] = true; T.correct++; T.pos++; }
   if (T.duration && T.text.length - T.pos < 80) extendTest();
-  placeCaret(); highlight(); updateLive();
+  placeCaret(); highlight(); updateLive(); updateNear();
   if (T.pos >= T.text.length) finish();
 }
 function back(word) {
   if (!T || T.done || T.pos === 0) return;
   const del = () => {
     T.pos--; if (T.marks[T.pos]) T.correct--; T.marks[T.pos] = undefined;
-    const sp = spans[T.pos]; sp.className = 'ch' + (T.text[T.pos] === ' ' ? ' sp' : '');
+    spans[T.pos].className = baseCls(T.text[T.pos]);
   };
+  const sepc = c => c === ' ' || c === '\n';
   if (word) {
-    while (T.pos > 0 && T.text[T.pos - 1] === ' ') del();
-    while (T.pos > 0 && T.text[T.pos - 1] !== ' ') del();
+    while (T.pos > 0 && sepc(T.text[T.pos - 1])) del();
+    while (T.pos > 0 && !sepc(T.text[T.pos - 1])) del();
   } else del();
-  placeCaret(); highlight(); updateLive();
+  placeCaret(); highlight(); updateLive(); updateNear();
 }
 function finish() {
   if (T.done) return;
-  T.done = true; stopTicker();
+  T.done = true; stopTicker(); stopMetro(); updateNear();
   let ms = performance.now() - T.t0;
   if (T.duration) ms = Math.min(ms, T.duration * 1000);
   ms = Math.max(ms, 1000);
@@ -497,8 +557,8 @@ function finish() {
 
   // الكلمات الخاطئة تدخل قائمة المراجعة، وتخرج بعد كتابتها صحيحة 3 مرات
   const lastWord = T.pos >= T.text.length ? T.words.length - 1 : T.wordOf[Math.max(0, T.pos - 1)] - 1;
-  for (let wi = 0; wi <= lastWord; wi++) {
-    let w = T.words[wi].replace(/[^\p{L}]/gu, '');
+  for (let wi = 0; wi <= lastWord && mode !== 'code'; wi++) {
+    let w = (T.words[wi] || '').replace(/[^\p{L}]/gu, '');
     if (S.lang === 'en') w = w.toLowerCase();
     if (!w) continue;
     if (T.wordErr.has(wi)) { delete p.errorWords[w]; p.errorWords[w] = 3; }
@@ -522,8 +582,11 @@ function finish() {
     const ghostMs = T.text.length / (T.ghostWpm * 5 / 60) * 1000;
     r.ghost = { ref: T.ghostWpm, win: T.duration ? wpm >= T.ghostWpm : ms <= ghostMs };
   }
-  const prevList = mode === 'practice' ? p.history : mode === 'sentences' ? p.sentHist : null;
+  const prevList = histFor(mode);
   if (prevList && prevList.length) r.newBest = wpm > Math.max(...prevList.map(x => x.wpm));
+  r.rhythm = rhythmScore(T.iv);
+  r.metro = S.settings.metro; r.nolook = S.settings.nolook;
+  if (r.ghost && r.ghost.win) S.counts.ghostWins++;
 
   if (mode === 'placement' && T.keys < 15) {
     save(); board.hidden = true; $('#kb').hidden = true; $('#finger').hidden = true;
@@ -542,20 +605,24 @@ function finish() {
     p.history.push(rec); if (p.history.length > 600) p.history.shift();
     r.unlocked = checkUnlock();
     r.focus = T.focus.map(k => ({ k, s: T.sk[k] }));
-  } else if (mode === 'sentences') {
-    const prev = p.sentHist.slice(-10);
+  } else if (mode === 'sentences' || mode === 'code' || mode === 'drill') {
+    const list = histFor(mode), prev = list.slice(-10);
     r.avg = prev.length ? Math.round(prev.reduce((a, b) => a + b.wpm, 0) / prev.length) : null;
-    p.sentHist.push(rec); if (p.sentHist.length > 300) p.sentHist.shift();
+    list.push(rec); if (list.length > 300) list.shift();
     let h = 0, m = 0;
     for (const [k, s] of Object.entries(T.sk)) if (!/\p{L}/u.test(k) || k !== k.toLowerCase()) { h += s.h; m += s.m; }
     r.punct = h + m ? { acc: h / (h + m), n: h + m } : null;
+    r.focus = T.focus.map(k => ({ k, s: T.sk[k] }));
+    S.counts[{ sentences: 'sentences', code: 'code', drill: 'drills' }[mode]]++;
   } else {
     const prevT = p.tests.filter(t => t.dur === T.duration);
     const best = Math.max(0, ...prevT.map(t => t.wpm));
     rec.dur = T.duration; p.tests.push(rec); if (p.tests.length > 300) p.tests.shift();
     r.record = prevT.length > 0 && wpm > best; r.best = Math.max(best, wpm); r.samples = T.samples;
   }
+  sound('done');
   save(); showResult(r);
+  checkAch({ r, textLen: T.text.length });
 }
 
 /* ================= Result card ================= */
@@ -581,7 +648,9 @@ function showResult(r) {
     <div class="r-num"><b data-to="${Math.round(r.acc * 100)}" data-suf="%">0%</b><span>الدقة</span></div>
     <div class="r-num sm"><b>${fmtTime(r.ms)}</b><span>الوقت</span></div>
     ${r.bestCombo ? `<div class="r-num sm"><b data-to="${r.bestCombo}">0</b><span>أطول سلسلة</span></div>` : ''}
+    ${r.rhythm != null ? `<div class="r-num sm"><b data-to="${r.rhythm}" data-suf="%">0%</b><span>${r.metro ? '🎵 ' : ''}انتظام الإيقاع</span></div>` : ''}
   </div>`;
+  if (r.mode === 'drill') html = html.replace('<h2>', '<h2>⚡ ');
   const badges = [];
   if (r.newBest) badges.push('<span class="badge-pop gold">🏆 أفضل نتيجة إلك</span>');
   if (r.ghost) badges.push(r.ghost.win ? `<span class="badge-pop good">👻 سبقت الشبح (${r.ghost.ref} ك/د)</span>` : `<span class="badge-pop">👻 الشبح سبقك — سرعته ${r.ghost.ref} ك/د</span>`);
@@ -610,6 +679,17 @@ function showResult(r) {
       ? `دقتك فيها <b>${Math.round(r.punct.acc * 100)}%</b> من ${r.punct.n} ضغطة.${r.punct.acc < 0.9 ? '<br>ركّز على Shift: اضغطه بخنصر اليد المعاكسة للحرف.' : ''}`
       : 'ما في علامات بهذه الجمل.'}</p></div>`;
     cta = 'جمل جديدة';
+  } else if (r.mode === 'code') {
+    html += missHtml(r.miss, 'أخطاء هذا الكود');
+    html += `<div class="r-box"><h3>الرموز والأحرف الكبيرة</h3><p>${r.punct
+      ? `دقتك فيها <b>${Math.round(r.punct.acc * 100)}%</b> من ${r.punct.n} ضغطة.${r.punct.acc < 0.9 ? '<br>الأقواس والرموز بتحتاج Shift: ثبّته بخنصر اليد الثانية.' : ''}`
+      : '—'}</p></div>`;
+    cta = 'كود جديد';
+  } else if (r.mode === 'drill') {
+    const f = r.focus.map(({ k, s }) => s ? `<span class="chip ${s.m / (s.h + s.m) > 0.08 ? 'bad' : ''}">${k}<small>${Math.round(s.h / (s.h + s.m) * 100)}%</small></span>` : `<span class="chip">${k}</span>`).join('');
+    html += `<div class="r-box"><h3>أضعف 3 حروف تدرّبت عليها</h3><div class="chips">${f}</div><p class="hint">كرّر التمرين كم مرة باليوم، ورح تشوف الحروف بتتغيّر لما تتحسّن.</p></div>`;
+    html += missHtml(r.miss, 'أخطاء التمرين');
+    cta = 'تمرين ضعف ثاني';
   } else {
     html += `<div class="r-box" style="grid-column:1/-1"><h3>السرعة خلال الاختبار</h3>${chart(r.samples.map(s => ({ wpm: s.wpm, acc: s.acc })), true)}</div>`;
     html += missHtml(r.miss, 'الحروف اللي غلطت فيها');
@@ -623,7 +703,7 @@ function showResult(r) {
       <p class="hint">💡 ${CONF_INFO[top.type].tip}</p></div>`;
   }
   html += '</div>';
-  const actions = `<div class="r-actions"><button class="btn primary big" id="rNext">${cta} <kbd>Enter</kbd></button>${r.mode !== 'placement' ? '<button class="btn" id="rAgain">إعادة نفس النص <kbd>Tab</kbd></button>' : ''}<button class="btn ghost" id="rStats">الإحصائيات</button></div>`;
+  const actions = `<div class="r-actions"><button class="btn primary big" id="rNext">${cta} <kbd>Enter</kbd></button>${r.mode !== 'placement' ? '<button class="btn" id="rAgain">إعادة نفس النص <kbd>Tab</kbd></button>' : ''}${r.mode === 'practice' ? '<button class="btn" id="rDrill">⚡ تمرين الضعف (دقيقة)</button>' : ''}<button class="btn ghost" id="rStats">الإحصائيات</button></div>`;
   box.innerHTML = html.replace('%%ACTIONS%%', actions);
   box.querySelectorAll('[data-to]').forEach(countUp);
   if (r.mode === 'placement' || r.record || r.newBest || r.unlocked) setTimeout(() => burst(r.mode === 'placement' ? 140 : 110), 250);
@@ -632,6 +712,7 @@ function showResult(r) {
   box.scrollIntoView({ block: 'start', behavior: 'smooth' });
   $('#rNext').onclick = next;
   if ($('#rAgain')) $('#rAgain').onclick = restart;
+  if ($('#rDrill')) $('#rDrill').onclick = startDrill;
   $('#rStats').onclick = () => go('stats');
 }
 
@@ -698,7 +779,8 @@ function labelKeyboard(map, opts = {}) {
 }
 function renderKbLabels() {
   const kb = $('#kb');
-  kb.hidden = !S.settings.keyboard; $('#finger').hidden = !S.settings.keyboard;
+  const showKb = S.settings.keyboard && !(S.settings.nolook && mode !== 'placement');
+  kb.hidden = !showKb; $('#finger').hidden = !showKb;
   kb.classList.toggle('fingers', S.settings.fingers);
   labelKeyboard(kbKeys, { locked: mode === 'practice' && P().unlocked < ORDER[S.lang].length });
 }
@@ -716,7 +798,7 @@ function highlight() {
     kbKeys[sh].classList.add('next');
     txt += ` + Shift ${sh === 'ShiftRight' ? 'الأيمن' : 'الأيسر'}`;
   }
-  fEl.innerHTML = `الحرف التالي <b>${exp === ' ' ? 'مسافة' : exp}</b> ← ${txt}`;
+  fEl.innerHTML = `الحرف التالي <b>${exp === ' ' ? 'مسافة' : exp === '\n' ? 'Enter' : esc(exp)}</b> ← ${txt}`;
 }
 function pressKey(code) { const k = kbKeys[code]; if (!k) return; k.classList.add('press'); setTimeout(() => k.classList.remove('press'), 110); }
 function flashErr(exp) {
@@ -746,9 +828,69 @@ function renderModeBar() {
   } else if (mode === 'test') {
     bar.innerHTML = `<span class="lbl">اختبار سرعة بكلمات عشوائية شائعة</span><span class="spacer"></span><div class="durs">${[15, 30, 60, 120].map(d => `<button data-dur="${d}" class="${d === S.settings.testDur ? 'active' : ''}">${d}ث</button>`).join('')}</div>`;
     bar.querySelectorAll('[data-dur]').forEach(b => b.onclick = () => { S.settings.testDur = +b.dataset.dur; save(); b.blur(); newRound(); });
+  } else if (mode === 'code') {
+    bar.innerHTML = `<span class="lbl">💻 كود حقيقي — <kbd>Enter</kbd> لسطر جديد، والمسافات بأول السطر بتنكتب لحالها</span><span class="spacer"></span>
+      <div class="durs">${Object.entries({ js: 'JavaScript', py: 'Python' }).map(([k, v]) => `<button data-cl="${k}" class="${S.settings.codeLang === k ? 'active' : ''}">${v}</button>`).join('')}</div>`;
+    bar.querySelectorAll('[data-cl]').forEach(b => b.onclick = () => { S.settings.codeLang = b.dataset.cl; save(); b.blur(); newRound(); });
+  } else if (mode === 'drill') {
+    bar.innerHTML = `<div class="chips"><span class="chip">⚡</span><div><b>تمرين الضعف — دقيقة وحدة</b><div class="lbl">كلمات مليانة بأضعف 3 حروف عندك</div></div></div><span class="spacer"></span>
+      <div class="chips">${T.focus.map(k => `<span class="chip bad">${esc(k)}</span>`).join('')}</div>`;
   } else {
     bar.innerHTML = `<div class="chips"><span class="chip">🎯</span><div><b>اختبار تحديد المستوى</b><div class="lbl">اكتب لمدة 60 ثانية بسرعتك الطبيعية — الدقة أهم من السرعة</div></div></div>`;
   }
+  if (mode !== 'placement') {
+    const cpm = metroCpm();
+    bar.insertAdjacentHTML('beforeend', `<div class="mods">
+      <button class="mod ${S.settings.metro ? 'on' : ''}" data-mod="metro" title="نبضة صوت ثابتة تكتب عليها">🎵 إيقاع <small>${cpm}</small></button>
+      <button class="mod ${S.settings.nolook ? 'on' : ''}" data-mod="nolook" title="الكيبورد بيختفي والنص الجاي بيبيّن شوي شوي">🙈 بدون نظر</button></div>`);
+    bar.querySelectorAll('[data-mod]').forEach(b => b.onclick = () => {
+      const k = b.dataset.mod; S.settings[k] = !S.settings[k]; save(); b.blur();
+      if (!T.started || T.done) newRound(T.done ? null : { words: T.words, focus: T.focus, review: T.review, drill: T.drill, bigrams: T.bigrams, text: T.snippet ? T.text : null, snippet: T.snippet });
+      else { b.classList.toggle('on', S.settings[k]); if (k === 'metro') S.settings.metro ? startMetro() : stopMetro(); else { board.classList.toggle('nolook', S.settings.nolook); renderKbLabels(); updateNear(); } }
+    });
+  }
+}
+
+/* ================= Metronome & no-look ================= */
+function metroCpm() {
+  const v = S.settings.metroCpm;
+  return v === 'auto' ? clamp(Math.round(P().target * 5 / 10) * 10, 60, 400) : +v;
+}
+let metroT = null, metroN = 0;
+function startMetro() {
+  stopMetro();
+  if (!S.settings.metro || !T || T.done || mode === 'placement') return;
+  const box = $('#metroBox'), dot = $('#metroDot'), cpm = metroCpm();
+  box.hidden = false; $('#metroLive').textContent = cpm;
+  const beat = () => {
+    metroN++; sound(metroN % 4 === 1 ? 'tickHi' : 'tick');
+    if (!reduced) { dot.classList.remove('beat'); void dot.offsetWidth; dot.classList.add('beat'); }
+  };
+  metroN = 0; beat(); metroT = setInterval(beat, 60000 / cpm);
+}
+function stopMetro() {
+  if (metroT) clearInterval(metroT); metroT = null;
+  const b = $('#metroBox'); if (!b) return;
+  b.hidden = !S.settings.metro || mode === 'placement';
+  $('#metroLive').textContent = metroCpm();
+}
+function rhythmScore(iv) {
+  if (!iv || iv.length < 20) return null;
+  const a = iv.slice().sort((x, y) => x - y), cut = a.slice(Math.floor(a.length * 0.05), Math.ceil(a.length * 0.95));
+  const mean = cut.reduce((s, x) => s + x, 0) / cut.length;
+  const sd = Math.sqrt(cut.reduce((s, x) => s + (x - mean) ** 2, 0) / cut.length);
+  return clamp(Math.round((1 - sd / mean) * 100), 0, 100);
+}
+let nearFrom = 0, nearTo = 0;
+function updateNear() {
+  for (let i = nearFrom; i < nearTo && i < spans.length; i++) spans[i].classList.remove('near');
+  nearFrom = nearTo = 0;
+  if (!S.settings.nolook || !T || T.done || mode === 'placement') return;
+  // الكلمة الحالية والكلمة اللي بعدها بس واضحين
+  let end = T.pos, seps = 0;
+  while (end < spans.length && seps < 2) { const c = T.text[end]; if (c === ' ' || c === '\n') seps++; end++; }
+  nearFrom = T.pos; nearTo = end;
+  for (let i = nearFrom; i < nearTo; i++) spans[i].classList.add('near');
 }
 
 /* ================= Views ================= */
@@ -759,13 +901,20 @@ function show(v) {
     if (on && !reduced) { s.classList.remove('enter'); void s.offsetWidth; s.classList.add('enter'); }
   });
 }
+var codePrevLang = null;
+function syncLangSeg() { $$('#langSeg button').forEach(b => b.classList.toggle('active', b.dataset.lang === S.lang)); }
 function go(t) {
-  tab = t; stopTicker();
-  $$('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === t));
+  tab = t; stopTicker(); stopMetro(); gameStop();
+  // الكود دايماً على الكيبورد الإنجليزي
+  if (t === 'code') { if (S.lang !== 'en') { codePrevLang = S.lang; S.lang = 'en'; syncLangSeg(); kbKeys = buildKeyboard($('#kb')); } }
+  else if (codePrevLang) { S.lang = codePrevLang; codePrevLang = null; syncLangSeg(); kbKeys = buildKeyboard($('#kb')); }
+  $$('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === (t === 'drill' ? 'practice' : t)));
   if (t === 'stats') { show('stats'); renderStats(); return; }
+  if (t === 'game') { show('game'); gameIntro(); return; }
   if (t === 'practice' && !P().placed) { show('welcome'); renderWelcome(); return; }
   mode = t; show('type'); newRound();
 }
+function startDrill() { go('drill'); tab = 'practice'; }
 function startPlacement() { mode = 'placement'; tab = 'practice'; show('type'); newRound(); }
 
 function renderWelcome() {
@@ -813,7 +962,7 @@ function biPanel() {
 }
 function renderStats() {
   const p = P(), all = ORDER[S.lang], ar = S.lang === 'ar';
-  const merged = [...p.history, ...p.sentHist, ...p.tests].sort((a, b) => a.d - b.d);
+  const merged = [...p.history, ...p.sentHist, ...p.codeHist, ...p.drillHist, ...p.tests].sort((a, b) => a.d - b.d);
   const best = merged.length ? Math.max(...merged.map(x => x.wpm)) : 0;
   const last = p.history.slice(-10);
   const avgW = last.length ? Math.round(last.reduce((a, b) => a + b.wpm, 0) / last.length) : 0;
@@ -825,7 +974,9 @@ function renderStats() {
   const ew = Object.keys(p.errorWords).reverse();
   $('#statsBody').innerHTML = `
   <div class="s-head"><h1>إحصائياتك ${ar ? 'بالعربي' : 'بالإنجليزي'}</h1>
-    ${p.placement ? `<span class="pill">${level(p.placement.wpm).icon} المستوى عند البداية: <b>${p.placement.skipped ? 'مبتدئ' : p.placement.wpm + ' ك/د'}</b></span>` : ''}</div>
+    ${p.placement ? `<span class="pill">${level(p.placement.wpm).icon} المستوى عند البداية: <b>${p.placement.skipped ? 'مبتدئ' : p.placement.wpm + ' ك/د'}</b></span>` : ''}
+    <span class="spacer"></span>${p.placed ? '<button class="btn primary" id="sDrill">⚡ تمرين الضعف — دقيقة</button>' : ''}</div>
+  ${achPanel()}
   <div class="cards">
     <div class="card"><b class="acc">${best}</b><span>أفضل سرعة (ك/د)</span></div>
     <div class="card"><b>${avgW}</b><span>متوسط آخر 10 دروس</span></div>
@@ -833,6 +984,7 @@ function renderStats() {
     <div class="card"><b>${avgW && first ? (avgW - first >= 0 ? '+' : '') + (avgW - first) : '—'}</b><span>التحسّن منذ البداية</span></div>
     <div class="card"><b>${merged.length}</b><span>دروس واختبارات</span></div>
     <div class="card"><b>${Math.round(p.totalMs / 60000)}</b><span>دقائق تدريب</span></div>
+    <div class="card"><b>${p.gameBest || 0}</b><span>🎮 أعلى نتيجة باللعبة</span></div>
   </div>
   <div class="panel"><h2>منحنى التقدّم</h2>${chart(merged.slice(-60))}</div>
   ${confPanel()}
@@ -848,24 +1000,255 @@ function renderStats() {
     </div>
   </div>`;
   labelKeyboard(buildKeyboard($('#heatKb')), { heat: true });
+  if ($('#sDrill')) $('#sDrill').onclick = startDrill;
 }
 
 /* ================= Sound / theme / toast ================= */
 let actx = null;
+/* حزم الأصوات: كلها مركّبة بـ WebAudio بدون ملفات */
+const PACKS = { soft: 'ناعم', mech: 'ميكانيكي', type: 'آلة كاتبة', bubble: 'فقاعات' };
+let noiseBuf = null;
+function tone(type, f0, f1, peak, dur, t) {
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.type = type; o.frequency.setValueAtTime(f0, t);
+  if (f1) o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(actx.destination); o.start(t); o.stop(t + dur + 0.02);
+}
+function hiss(freq, q, peak, dur, t, kind = 'bandpass') {
+  if (!noiseBuf) {
+    noiseBuf = actx.createBuffer(1, actx.sampleRate * 0.25, actx.sampleRate);
+    const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  const s = actx.createBufferSource(), f = actx.createBiquadFilter(), g = actx.createGain();
+  s.buffer = noiseBuf; f.type = kind; f.frequency.value = freq; f.Q.value = q;
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + 0.002); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  s.connect(f).connect(g).connect(actx.destination); s.start(t, Math.random() * 0.1); s.stop(t + dur + 0.02);
+}
 function sound(type) {
-  if (!S.sound) return;
+  const metro = type === 'tick' || type === 'tickHi';
+  if (!S.sound && !metro) return;
   try {
     actx = actx || new (window.AudioContext || window.webkitAudioContext)();
-    const t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
-    const err = type === 'err';
-    o.type = err ? 'square' : 'triangle';
-    o.frequency.value = err ? 130 : 620 + Math.random() * 90;
+    if (actx.state === 'suspended') actx.resume();
     const v = (S.settings.volume ?? 0.6) * 1.6;
     if (v <= 0) return;
-    g.gain.setValueAtTime((err ? 0.035 : 0.02) * v, t);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + (err ? 0.13 : 0.035));
-    o.connect(g).connect(actx.destination); o.start(t); o.stop(t + 0.14);
+    const t = actx.currentTime, pack = S.settings.soundPack, sp = type === 'space';
+    switch (type) {
+      case 'tick': tone('sine', 1250, 0, 0.06 * v, 0.035, t); return;
+      case 'tickHi': tone('sine', 1750, 0, 0.08 * v, 0.04, t); return;
+      case 'err': pack === 'soft' ? tone('square', 130, 0, 0.035 * v, 0.13, t) : tone('square', 120, 70, 0.04 * v, 0.16, t); return;
+      case 'done': tone('sine', 1568, 0, 0.05 * v, 0.9, t); tone('sine', 2093, 0, 0.03 * v, 0.7, t + 0.08); return;
+      case 'pop': tone('sine', 480, 1500, 0.07 * v, 0.12, t); hiss(5000, 0.7, 0.03 * v, 0.05, t, 'highpass'); return;
+      case 'level': [784, 988, 1175, 1568].forEach((f, i) => tone('triangle', f, 0, 0.045 * v, 0.25, t + i * 0.08)); return;
+      case 'lose': tone('sine', 240, 80, 0.08 * v, 0.4, t); return;
+      case 'ach': [1047, 1319, 1568, 2093].forEach((f, i) => tone('sine', f, 0, 0.05 * v, 0.5, t + i * 0.09)); return;
+    }
+    if (pack === 'mech') { hiss(sp ? 1600 : 3200, 1.1, 0.12 * v, 0.03, t); tone('sine', sp ? 85 : 150, 0, 0.06 * v, 0.045, t); }
+    else if (pack === 'type') { hiss(4200, 0.8, 0.16 * v, 0.02, t, 'highpass'); tone('square', sp ? 170 : 380 + Math.random() * 60, 0, 0.014 * v, 0.025, t); }
+    else if (pack === 'bubble') tone('sine', sp ? 260 : 360 + Math.random() * 140, sp ? 520 : 900, 0.055 * v, 0.07, t);
+    else tone('triangle', sp ? 480 : 620 + Math.random() * 90, 0, 0.022 * v, 0.035, t);
   } catch (e) {}
+}
+
+/* ================= Code snippets ================= */
+const CODE = { js: (window.CODE_SNIPPETS || {}).js || ['let x = 1;'], py: (window.CODE_SNIPPETS || {}).py || ['x = 1'] };
+
+/* ================= Achievements ================= */
+const ACH = [
+  { id: 'first',    icon: '🌱', name: 'البداية',          desc: 'خلّص أول درس',                       ok: c => true },
+  { id: 'placed',   icon: '🎯', name: 'عرفت مستواك',      desc: 'خلّص اختبار تحديد المستوى',          ok: c => c.r && c.r.mode === 'placement' },
+  { id: 'w30',      icon: '🚶', name: '30 ك/د',           desc: 'وصّل سرعة 30 كلمة بالدقيقة',          ok: c => c.r && c.textLen >= 60 && c.r.wpm >= 30 },
+  { id: 'w50',      icon: '🏃', name: '50 ك/د',           desc: 'وصّل سرعة 50 كلمة بالدقيقة',          ok: c => c.r && c.textLen >= 60 && c.r.wpm >= 50 },
+  { id: 'w70',      icon: '🚀', name: '70 ك/د',           desc: 'وصّل سرعة 70 كلمة بالدقيقة',          ok: c => c.r && c.textLen >= 60 && c.r.wpm >= 70 },
+  { id: 'w100',     icon: '⚡', name: '100 ك/د',          desc: 'وصّل سرعة 100 كلمة بالدقيقة',         ok: c => c.r && c.textLen >= 60 && c.r.wpm >= 100 },
+  { id: 'perfect',  icon: '💎', name: 'بدون ولا غلطة',    desc: 'درس كامل بدقة 100%',                  ok: c => c.r && c.textLen >= 60 && c.r.acc >= 1 },
+  { id: 'combo100', icon: '🔥', name: 'سلسلة 100',         desc: '100 حرف صح ورا بعض',                 ok: c => c.r && c.r.bestCombo >= 100 },
+  { id: 'combo300', icon: '☄️', name: 'سلسلة 300',         desc: '300 حرف صح ورا بعض',                 ok: c => c.r && c.r.bestCombo >= 300 },
+  { id: 'ghost5',   icon: '👻', name: 'صيّاد الأشباح',     desc: 'اسبق الشبح 5 مرات',                   ok: () => S.counts.ghostWins >= 5 },
+  { id: 'allAr',    icon: '🏆', name: 'الأبجدية العربية',  desc: 'افتح كل الحروف العربية',               ok: () => S.profiles.ar.unlocked >= ORDER.ar.length },
+  { id: 'allEn',    icon: '🔤', name: 'كل الحروف الإنجليزية', desc: 'افتح كل الحروف الإنجليزية',        ok: () => S.profiles.en.unlocked >= ORDER.en.length },
+  { id: 'bi',       icon: '🌍', name: 'ثنائي اللغة',       desc: 'تدرّب بالعربي والإنجليزي',             ok: () => ['ar', 'en'].every(l => { const q = S.profiles[l]; return q.history.length + q.tests.length + q.sentHist.length > 0; }) },
+  { id: 'sent10',   icon: '📝', name: 'قارئ نهم',          desc: 'خلّص 10 دروس جمل',                    ok: () => S.counts.sentences >= 10 },
+  { id: 'coder',    icon: '💻', name: 'مبرمج',             desc: 'خلّص أول تمرين كود',                  ok: () => S.counts.code >= 1 },
+  { id: 'drill5',   icon: '⚡', name: 'مطارد الضعف',       desc: 'خلّص 5 تمارين ضعف',                   ok: () => S.counts.drills >= 5 },
+  { id: 'metro',    icon: '🎵', name: 'على الإيقاع',       desc: 'خلّص درس بالإيقاع بدقة 95%',          ok: c => c.r && c.r.metro && c.r.acc >= 0.95 && c.textLen >= 60 },
+  { id: 'nolook',   icon: '🙈', name: 'بدون نظر',          desc: 'خلّص درس بدون نظر بدقة 95%',          ok: c => c.r && c.r.nolook && c.r.acc >= 0.95 && c.textLen >= 60 },
+  { id: 'game1k',   icon: '🎮', name: 'لاعب',              desc: '1000 نقطة باللعبة',                   ok: c => c.game && c.game.score >= 1000 },
+  { id: 'game5k',   icon: '👾', name: 'أسطورة اللعبة',     desc: '5000 نقطة باللعبة',                   ok: c => c.game && c.game.score >= 5000 },
+  { id: 'hour',     icon: '⏳', name: 'ساعة تدريب',        desc: 'مجموع تدريبك وصل ساعة',               ok: () => S.profiles.ar.totalMs + S.profiles.en.totalMs >= 3600000 }
+];
+let achQueue = [], achShowing = false;
+function checkAch(ctx) {
+  const fresh = ACH.filter(a => !S.ach[a.id] && a.ok(ctx));
+  if (!fresh.length) return;
+  for (const a of fresh) S.ach[a.id] = Date.now();
+  save(); achQueue.push(...fresh); if (!achShowing) nextAch();
+}
+function nextAch() {
+  const a = achQueue.shift(); if (!a) { achShowing = false; return; }
+  achShowing = true;
+  setTimeout(() => {
+    toast(`<span class="ach-toast"><b>${a.icon}</b><span>إنجاز جديد!<br><strong>${a.name}</strong></span></span>`);
+    sound('ach'); burst(70);
+    setTimeout(nextAch, 2600);
+  }, 900);
+}
+function achPanel() {
+  const got = ACH.filter(a => S.ach[a.id]).length;
+  return `<div class="panel"><h2>🏅 الإنجازات <span class="lbl">— ${got} من ${ACH.length}</span></h2>
+    <div class="ach-grid">${ACH.map(a => { const d = S.ach[a.id];
+      return `<div class="ach ${d ? 'got' : ''}" title="${esc(a.desc)}"><b>${a.icon}</b><span>${a.name}</span><small>${d ? new Date(d).toLocaleDateString('ar') : esc(a.desc)}</small></div>`; }).join('')}</div></div>`;
+}
+
+/* ================= Falling words game ================= */
+const G = { on: false, paused: false, words: [], target: null, raf: 0 };
+const arena = $('#arena');
+function gameIntro() {
+  gameStop();
+  const p = P();
+  arena.querySelectorAll('.fw').forEach(e => e.remove());
+  gHud();
+  $('#gOverlay').hidden = false;
+  $('#gOverlay').innerHTML = `<div class="g-card"><div class="g-emoji">🎮</div><h2>الكلمات النازلة</h2>
+    <p>اكتب كل كلمة قبل ما توصل للأرض. كل 8 كلمات بيطلع مستوى أسرع، ومعك 3 أرواح ❤️</p>
+    <p class="lbl">أعلى نتيجة إلك ${S.lang === 'ar' ? 'بالعربي' : 'بالإنجليزي'}: <b>${p.gameBest || 0}</b></p>
+    <button class="btn primary big" id="gStart">ابدأ اللعبة <kbd>Enter</kbd></button></div>`;
+  $('#gStart').onclick = gameStart;
+}
+function gHud() {
+  $('#gScore').textContent = G.score || 0; $('#gLevel').textContent = G.level || 1;
+  $('#gLives').textContent = '❤️'.repeat(Math.max(0, G.lives ?? 3)) + '🖤'.repeat(Math.max(0, 3 - (G.lives ?? 3)));
+  const min = G.t0 ? (performance.now() - G.t0) / 60000 : 0;
+  $('#gWpm').textContent = min > 0.05 ? Math.round((G.chars || 0) / 5 / min) : 0;
+}
+function gameStart() {
+  gameStop();
+  arena.querySelectorAll('.fw').forEach(e => e.remove());
+  Object.assign(G, { on: true, paused: false, words: [], target: null, score: 0, level: 1, lives: 3, cleared: 0, chars: 0, keys: 0, errors: 0,
+    combo: 0, t0: performance.now(), last: performance.now(), lastSpawn: 0 });
+  $('#gOverlay').hidden = true; gHud();
+  if (TOUCH) focusMobile();
+  G.raf = requestAnimationFrame(gameStep);
+}
+function gameStop() { G.on = false; cancelAnimationFrame(G.raf); }
+function gamePause(p) {
+  if (!G.on) return;
+  G.paused = p;
+  $('#gOverlay').hidden = !p;
+  if (p) $('#gOverlay').innerHTML = `<div class="g-card"><div class="g-emoji">⏸</div><h2>إيقاف مؤقت</h2><button class="btn primary big" id="gResume">كمّل <kbd>Esc</kbd></button></div>`, $('#gResume').onclick = () => gamePause(false);
+  else { G.last = performance.now(); G.raf = requestAnimationFrame(gameStep); }
+}
+function gamePool() {
+  const list = WORDS[S.lang].filter(w => w.length >= 2 && w.length <= 3 + Math.min(6, G.level));
+  const weak = weakest3();
+  const hits = list.filter(w => weak.some(k => w.includes(k)));
+  return Math.random() < 0.35 && hits.length ? hits : list;
+}
+function spawnWord() {
+  const used = new Set(G.words.map(w => w.text[0]));
+  let text = '', tries = 0;
+  do { text = pick(gamePool()); tries++; } while (used.has(text[0]) && tries < 12);
+  const el = document.createElement('div');
+  el.className = 'fw ' + S.lang; el.dir = S.lang === 'ar' ? 'rtl' : 'ltr';
+  el.innerHTML = `<span class="gt"></span><span class="gr">${esc(text)}</span>`;
+  arena.appendChild(el);
+  const W = arena.clientWidth, w = el.offsetWidth;
+  const word = { el, text, x: 10 + Math.random() * Math.max(10, W - w - 20), y: -40, typed: 0 };
+  el.style.transform = `translate(${word.x}px, ${word.y}px)`;
+  G.words.push(word);
+}
+function gameStep(now) {
+  if (!G.on || G.paused) return;
+  const dt = Math.min(60, now - G.last); G.last = now;
+  const speed = 26 + G.level * 9, every = Math.max(650, 2300 - G.level * 170), H = arena.clientHeight;
+  if (now - G.lastSpawn > every && G.words.length < 4 + G.level) { spawnWord(); G.lastSpawn = now; }
+  for (const w of [...G.words]) {
+    w.y += speed * dt / 1000;
+    w.el.style.transform = `translate(${w.x}px, ${w.y}px)`;
+    w.el.classList.toggle('danger', w.y > H * 0.7);
+    if (w.y > H - 44) gameMiss(w);
+  }
+  if (G.on) { gHud(); G.raf = requestAnimationFrame(gameStep); }
+}
+function removeWord(w, cls) {
+  G.words = G.words.filter(x => x !== w);
+  if (G.target === w) G.target = null;
+  w.el.classList.add(cls); setTimeout(() => w.el.remove(), 450);
+}
+function gameMiss(w) {
+  if (!G.on) return;
+  removeWord(w, 'miss'); G.lives--; G.combo = 0; sound('lose');
+  arena.classList.remove('hit'); void arena.offsetWidth; arena.classList.add('hit');
+  $('#gBuf').textContent = '';
+  if (G.lives <= 0) gameOver();
+}
+function renderTarget(w) {
+  w.el.querySelector('.gt').textContent = w.text.slice(0, w.typed);
+  w.el.querySelector('.gr').textContent = w.text.slice(w.typed);
+  $('#gBuf').textContent = w.text.slice(0, w.typed);
+}
+function gameChar(c) {
+  if (!G.on || G.paused || c === ' ' || c === '\n') return;
+  G.keys++;
+  if (!G.target) {
+    const cands = G.words.filter(w => same(c, w.text[0])).sort((a, b) => b.y - a.y);
+    if (!cands.length) return gameErr();
+    G.target = cands[0]; G.target.el.classList.add('locked');
+  } else if (!same(c, G.target.text[G.target.typed])) return gameErr();
+  const w = G.target; w.typed++; G.chars++; G.combo++; sound('ok'); renderTarget(w);
+  if (w.typed >= w.text.length) {
+    const pts = w.text.length * 10 * G.level + Math.min(50, G.combo);
+    G.score += pts; G.cleared++; sound('pop');
+    const fl = document.createElement('div'); fl.className = 'pts'; fl.textContent = '+' + pts;
+    fl.style.transform = `translate(${w.x}px, ${w.y}px)`; arena.appendChild(fl); setTimeout(() => fl.remove(), 800);
+    removeWord(w, 'boom'); $('#gBuf').textContent = '';
+    if (G.cleared % 8 === 0) {
+      G.level++; sound('level');
+      const lv = document.createElement('div'); lv.className = 'lvl-up'; lv.textContent = `المستوى ${G.level}!`;
+      arena.appendChild(lv); setTimeout(() => lv.remove(), 1300);
+    }
+  }
+  gHud();
+}
+function gameErr() {
+  G.errors++; G.combo = 0; sound('err');
+  const w = G.target; if (w) { w.el.classList.remove('shake'); void w.el.offsetWidth; w.el.classList.add('shake'); }
+}
+function gameBack() {
+  const w = G.target; if (!w) return;
+  w.typed--; if (w.typed <= 0) { w.typed = 0; w.el.classList.remove('locked'); G.target = null; }
+  renderTarget(w);
+}
+function gameOver() {
+  gameStop(); G.lives = Math.max(0, G.lives); gHud();
+  const p = P(), min = (performance.now() - G.t0) / 60000;
+  const wpm = Math.round(G.chars / 5 / Math.max(min, 0.05)), acc = G.keys ? (G.keys - G.errors) / G.keys : 0;
+  const best = p.gameBest || 0, record = G.score > best;
+  p.gameBest = Math.max(best, G.score); p.totalMs += min * 60000;
+  p.games.push({ d: Date.now(), score: G.score, level: G.level, wpm }); if (p.games.length > 100) p.games.shift();
+  S.counts.games++; save();
+  $('#gOverlay').hidden = false;
+  $('#gOverlay').innerHTML = `<div class="g-card"><div class="g-emoji">${record ? '🏆' : '💥'}</div><h2>${record ? 'رقم قياسي جديد!' : 'انتهت اللعبة'}</h2>
+    <div class="r-nums g-nums"><div class="r-num"><b data-to="${G.score}">0</b><span>النقاط</span></div><div class="r-num sm"><b>${G.level}</b><span>المستوى</span></div>
+    <div class="r-num sm"><b>${G.cleared}</b><span>كلمة</span></div><div class="r-num sm"><b>${wpm}</b><span>ك/د</span></div><div class="r-num sm"><b>${Math.round(acc * 100)}%</b><span>الدقة</span></div></div>
+    <p class="lbl">أعلى نتيجة: <b>${p.gameBest}</b></p>
+    <button class="btn primary big" id="gStart">العب مرة ثانية <kbd>Enter</kbd></button></div>`;
+  $('#gOverlay').querySelectorAll('[data-to]').forEach(countUp);
+  $('#gStart').onclick = gameStart;
+  if (record && G.score > 0) burst(120);
+  checkAch({ game: { score: G.score } });
+}
+function gameKey(e) {
+  if (e.key === 'Escape') { e.preventDefault(); if (G.on) gamePause(!G.paused); return; }
+  if (!G.on) { if (e.key === 'Enter') { e.preventDefault(); gameStart(); } return; }
+  if (G.paused) { if (e.key === 'Enter') { e.preventDefault(); gamePause(false); } return; }
+  if (e.key === 'Backspace') { e.preventDefault(); gameBack(); return; }
+  if (e.metaKey || (e.ctrlKey && !e.altKey) || (e.altKey && !e.ctrlKey) || e.isComposing) return;
+  const ch = e.key;
+  if (!ch || (ch.length > 1 && !/^[؀-ۿ]+$/.test(ch))) return;
+  e.preventDefault();
+  for (const c of translate(ch, e)) gameChar(c);
 }
 /* ================= Appearance ================= */
 const SKINS = {
@@ -976,6 +1359,10 @@ function buildSettings() {
   switchCtl('setCombo', () => st.combo, v => { st.combo = v; applyAppearance(); });
   switchCtl('setFx', () => st.fx, v => { st.fx = v; if (v) burst(60); });
   switchCtl('setSound', () => S.sound, v => { S.sound = v; applySound(); if (v) sound('ok'); });
+  segCtl('soundPack', PACKS, st.soundPack, k => { st.soundPack = k; if (!S.sound) { S.sound = true; applySound(); $('#setSound').checked = true; } [0, 110, 220].forEach((d, i) => setTimeout(() => sound(i === 2 ? 'space' : 'ok'), d)); });
+  switchCtl('setMetro', () => st.metro, v => { st.metro = v; });
+  segCtl('metroCpm', { auto: 'تلقائي', 120: '120', 180: '180', 240: '240', 300: '300' }, st.metroCpm, k => { st.metroCpm = k; });
+  switchCtl('setNolook', () => st.nolook, v => { st.nolook = v; });
   const vol = $('#setVol'); vol.value = st.volume;
   vol.oninput = () => { st.volume = +vol.value; save(); };
   vol.onchange = () => sound('ok');
@@ -1049,16 +1436,19 @@ function translate(ch, e) {
 }
 
 /* ================= Input ================= */
+const mi = $('#mobileInput');
 document.addEventListener('keydown', e => {
   if (drawerOpen()) { if (e.key === 'Escape') closeDrawer(); return; }
   if (view === 'welcome') { if (e.key === 'Enter') { e.preventDefault(); startPlacement(); } return; }
+  if (view === 'game') { if (document.activeElement && document.activeElement !== mi && document.activeElement !== document.body) document.activeElement.blur(); gameKey(e); return; }
   if (view !== 'type' || !T) return;
   pressKey(e.code);
   if (e.getModifierState) $('#capsWarn').hidden = !e.getModifierState('CapsLock');
   if (e.key === 'Tab') { e.preventDefault(); restart(); return; }
   if (e.key === 'Escape') { e.preventDefault(); newRound(); return; }
   if (T.done) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); next(); } return; }
-  if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
+  if (document.activeElement && document.activeElement !== document.body && document.activeElement !== mi) document.activeElement.blur();
+  if (e.key === 'Enter') { e.preventDefault(); if (T.text[T.pos] === '\n') typeChar('\n'); return; }
   if (e.key === 'Backspace') { e.preventDefault(); back(e.ctrlKey || e.altKey); return; }
   if (e.metaKey || (e.ctrlKey && !e.altKey) || (e.altKey && !e.ctrlKey) || e.isComposing) return;
   let ch = e.key;
@@ -1066,12 +1456,54 @@ document.addEventListener('keydown', e => {
   e.preventDefault();
   for (const c of translate(ch, e)) typeChar(c);
 });
+/* ---------- الموبايل والتابلت: حقل مخفي بيفتح كيبورد الجهاز ---------- */
+function resetMI() { mi.value = ' '; try { mi.setSelectionRange(1, 1); } catch (e) {} }
+function focusMobile() { resetMI(); mi.focus({ preventScroll: true }); }
+function mobileChar(c) {
+  if (view === 'game') { if (!G.on) gameStart(); else gameChar(c); return; }
+  if (view !== 'type' || !T) return;
+  if (T.done) { if (c === ' ' || c === '\n') next(); return; }
+  typeChar(c);
+}
+function mobileBack() {
+  if (view === 'game') gameBack();
+  else if (view === 'type' && T && !T.done) back(false);
+}
+mi.addEventListener('input', () => {
+  const v = mi.value;
+  if (v.length === 0) mobileBack();
+  else if (v[0] !== ' ') for (const c of v) mobileChar(c);
+  else for (const c of v.slice(1)) mobileChar(c);
+  resetMI();
+});
+mi.addEventListener('focus', () => document.body.classList.add('mi-on'));
+mi.addEventListener('blur', () => document.body.classList.remove('mi-on'));
+if (TOUCH) document.body.classList.add('touch');
+board.addEventListener('click', () => { if (TOUCH) focusMobile(); });
+arena.addEventListener('click', e => { if (TOUCH && !e.target.closest('button')) focusMobile(); });
 window.addEventListener('resize', () => { if (view === 'type' && T) { measure(); placeCaret(); } });
+window.addEventListener('blur', () => { if (view === 'game' && G.on && !G.paused) gamePause(true); });
+
+/* ---------- تثبيت كتطبيق (PWA) ---------- */
+let installEvt = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; $('#installBtn').hidden = false; });
+$('#installBtn').onclick = async () => {
+  if (!installEvt) return;
+  installEvt.prompt();
+  try { await installEvt.userChoice; } catch (e) {}
+  installEvt = null; $('#installBtn').hidden = true;
+};
+try {
+  const top = window.top === window.self;
+  if ('serviceWorker' in navigator && top && (location.protocol === 'https:' || location.hostname === 'localhost'))
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+} catch (e) {}
 document.fonts && document.fonts.ready.then(() => { if (view === 'type' && T) { measure(); placeCaret(); } });
 
 /* ================= Header controls ================= */
 $$('#tabs button').forEach(b => b.onclick = () => { b.blur(); go(b.dataset.tab); });
 function setLang(l) {
+  if (tab === 'code') { if (l === 'ar') toast('💻 الكود دايماً على الكيبورد الإنجليزي'); return; }
   S.lang = l; save();
   $$('#langSeg button').forEach(b => b.classList.toggle('active', b.dataset.lang === l));
   go(tab === 'stats' ? 'stats' : tab);
