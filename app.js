@@ -28,7 +28,8 @@ const CODES = [...ROWS[0].slice(0, 13), ...ROWS[1].slice(1), ...ROWS[2].slice(1,
 const EN_N = [..."`1234567890-=qwertyuiop[]\\asdfghjkl;'zxcvbnm,./"];
 const EN_S = [...'~!@#$%^&*()_+QWERTYUIOP{}|ASDFGHJKL:"ZXCVBNM<>?'];
 const AR_N = ['ذ', ...'1234567890-=', ...'ضصثقفغعهخحجد', '\\', ...'شسيبلاتنمكط', 'ئ', 'ء', 'ؤ', 'ر', 'لا', 'ى', 'ة', 'و', 'ز', 'ظ'];
-const AR_S = { KeyT: 'لإ', KeyY: 'إ', KeyG: 'لأ', KeyH: 'أ', KeyB: 'لآ', KeyN: 'آ', Slash: '؟' };
+const AR_S = { KeyT: 'لإ', KeyY: 'إ', KeyG: 'لأ', KeyH: 'أ', KeyB: 'لآ', KeyN: 'آ', Slash: '؟',
+  KeyK: '،', KeyP: '؛', Semicolon: ':', Quote: '"', Period: '.', Comma: ',', Digit1: '!', KeyL: '/' };
 const LAYOUT = { en: { Space: [' ', ' '] }, ar: { Space: [' ', ' '] } };
 CODES.forEach((c, i) => { LAYOUT.en[c] = [EN_N[i], EN_S[i]]; LAYOUT.ar[c] = [AR_N[i], AR_S[c] || '']; });
 const REV = { en: {}, ar: {} };
@@ -60,10 +61,17 @@ for (const l of ['en', 'ar']) {
   const set = new Set(ORDER[l]);
   WORDS[l] = [...new Set(window.WORD_LISTS[l].trim().split(/\s+/))].filter(w => [...w].every(c => set.has(c)));
 }
+/* الجمل الحقيقية: حروف + علامات ترقيم (+ أحرف كبيرة بالإنجليزي) */
+const PUNCT = { ar: '،.؟!؛:', en: ",.?!';:-" };
+const SENT = {};
+for (const l of ['en', 'ar']) {
+  const ok = new Set([...ORDER[l], ...(l === 'en' ? ORDER.en.map(c => c.toUpperCase()) : []), ...PUNCT[l], ' ']);
+  SENT[l] = (window.SENTENCES ? window.SENTENCES[l] : '').split('\n').map(s => s.trim().replace(/\s+/g, ' ')).filter(s => s && [...s].every(c => ok.has(c)));
+}
 
 /* ================= State ================= */
 const STORE = 'anamil-v1';
-const newProfile = () => ({ placed: false, placement: null, keys: {}, history: [], tests: [], errorWords: {}, unlocked: 6, sinceUnlock: 0, target: 25, totalMs: 0 });
+const newProfile = () => ({ placed: false, placement: null, keys: {}, history: [], tests: [], sentHist: [], seenSent: [], errorWords: {}, unlocked: 6, sinceUnlock: 0, target: 25, totalMs: 0 });
 let S = null;
 try { S = JSON.parse(localStorage.getItem(STORE)); } catch (e) {}
 if (!S || typeof S !== 'object') S = {};
@@ -135,6 +143,22 @@ function makeLesson() {
     words.push(w);
   }
   return { words: shuffle(words), focus, review };
+}
+function makeSentences() {
+  const p = P(), list = SENT[S.lang], avg = avgTime();
+  const n = { 15: 2, 25: 3, 40: 5 }[S.settings.length] || 3;
+  const weak = ORDER[S.lang].filter(k => { const s = keyStat(k); return s.h + s.m >= 8; })
+    .sort((a, b) => weakness(b, avg) - weakness(a, avg)).slice(0, 4);
+  const seen = new Set(p.seenSent);
+  const picked = list.map((s, i) => {
+    const low = s.toLowerCase(); let sc = Math.random() * 2;
+    for (const k of weak) sc += (low.split(k).length - 1) * 0.6;   // جمل فيها حروفك الضعيفة أولاً
+    if (seen.has(i)) sc -= 6;                                        // وتجنّب تكرار جمل قريبة
+    return { i, sc };
+  }).sort((a, b) => b.sc - a.sc).slice(0, n).map(x => x.i);
+  p.seenSent = [...p.seenSent, ...picked].slice(-Math.floor(list.length * 0.6));
+  const text = picked.map(i => list[i]).join(' ');
+  return { words: text.split(' '), focus: weak.slice(0, 3), review: [] };
 }
 function randomWords(n) {
   const list = WORDS[S.lang], out = [];
@@ -222,8 +246,8 @@ function placeCaret() {
 function newRound(reuse) {
   stopTicker();
   let words, focus = [], review = [];
-  if (mode === 'practice') {
-    const L = reuse || makeLesson(); words = L.words; focus = L.focus; review = L.review || [];
+  if (mode === 'practice' || mode === 'sentences') {
+    const L = reuse || (mode === 'practice' ? makeLesson() : makeSentences()); words = L.words; focus = L.focus; review = L.review || [];
   } else words = reuse ? reuse.words : randomWords(mode === 'test' ? Math.max(60, S.settings.testDur * 2) : 120);
   T = {
     words: [...words], focus, review, text: words.join(' '), pos: 0, marks: [], correct: 0, keys: 0, errors: 0,
@@ -237,7 +261,7 @@ function newRound(reuse) {
 }
 function restart() {
   if (!T) return;
-  if (mode === 'practice' && (T.started || T.done)) newRound({ words: T.words, focus: T.focus, review: T.review });
+  if ((mode === 'practice' || mode === 'sentences') && (T.started || T.done)) newRound({ words: T.words, focus: T.focus, review: T.review });
   else newRound();
 }
 function next() {
@@ -339,7 +363,9 @@ function finish() {
   // الكلمات الخاطئة تدخل قائمة المراجعة، وتخرج بعد كتابتها صحيحة 3 مرات
   const lastWord = T.pos >= T.text.length ? T.words.length - 1 : T.wordOf[Math.max(0, T.pos - 1)] - 1;
   for (let wi = 0; wi <= lastWord; wi++) {
-    const w = T.words[wi];
+    let w = T.words[wi].replace(/[^\p{L}]/gu, '');
+    if (S.lang === 'en') w = w.toLowerCase();
+    if (!w) continue;
     if (T.wordErr.has(wi)) { delete p.errorWords[w]; p.errorWords[w] = 3; }
     else if (p.errorWords[w] && --p.errorWords[w] <= 0) delete p.errorWords[w];
   }
@@ -367,6 +393,13 @@ function finish() {
     p.history.push(rec); if (p.history.length > 600) p.history.shift();
     r.unlocked = checkUnlock();
     r.focus = T.focus.map(k => ({ k, s: T.sk[k] }));
+  } else if (mode === 'sentences') {
+    const prev = p.sentHist.slice(-10);
+    r.avg = prev.length ? Math.round(prev.reduce((a, b) => a + b.wpm, 0) / prev.length) : null;
+    p.sentHist.push(rec); if (p.sentHist.length > 300) p.sentHist.shift();
+    let h = 0, m = 0;
+    for (const [k, s] of Object.entries(T.sk)) if (!/\p{L}/u.test(k) || k !== k.toLowerCase()) { h += s.h; m += s.m; }
+    r.punct = h + m ? { acc: h / (h + m), n: h + m } : null;
   } else {
     const prevT = p.tests.filter(t => t.dur === T.duration);
     const best = Math.max(0, ...prevT.map(t => t.wpm));
@@ -417,6 +450,12 @@ function showResult(r) {
     html += `<div class="r-box"><h3>التقدّم</h3><p>${left
       ? `الحروف المفتوحة <b>${p.unlocked}/${all.length}</b> · الهدف <b>${p.target}</b> ك/د بدقة 93% لدرسين متتاليين.`
       : `كل الحروف مفتوحة ✔ · متوسط آخر 10 دروس: <b>${r.avg ?? r.wpm}</b> ك/د.`}<br>كلمات في قائمة المراجعة: <b>${r.reviewCount}</b></p></div>`;
+  } else if (r.mode === 'sentences') {
+    html += missHtml(r.miss, 'أخطاء هذه الجمل');
+    html += `<div class="r-box"><h3>${S.lang === 'en' ? 'علامات الترقيم والأحرف الكبيرة' : 'علامات الترقيم'}</h3><p>${r.punct
+      ? `دقتك فيها <b>${Math.round(r.punct.acc * 100)}%</b> من ${r.punct.n} ضغطة.${r.punct.acc < 0.9 ? '<br>ركّز على Shift: اضغطه بخنصر اليد المعاكسة للحرف.' : ''}`
+      : 'ما في علامات بهذه الجمل.'}</p></div>`;
+    cta = 'جمل جديدة';
   } else {
     html += `<div class="r-box" style="grid-column:1/-1"><h3>السرعة خلال الاختبار</h3>${chart(r.samples.map(s => ({ wpm: s.wpm, acc: s.acc })), true)}</div>`;
     html += missHtml(r.miss, 'الحروف اللي غلطت فيها');
@@ -533,6 +572,10 @@ function renderModeBar() {
     if (T.review.length) h += `<span class="pill">🔁 مراجعة <b>${T.review.length}</b> كلمات غلطت فيها</span>`;
     h += `<span class="pill">الهدف <b>${p.target}</b> ك/د</span>`;
     bar.innerHTML = h;
+  } else if (mode === 'sentences') {
+    bar.innerHTML = `<div class="chips"><span class="lbl">جمل حقيقية بعلامات ترقيم${S.lang === 'en' ? ' وأحرف كبيرة' : ''}</span></div>`
+      + (T.focus.length ? `<div class="chips"><span class="lbl">اخترنا جملاً فيها حروفك الضعيفة</span>${T.focus.map(k => `<span class="chip">${k}</span>`).join('')}</div>` : '')
+      + `<span class="spacer"></span><span class="pill">${SENT[S.lang].length} جملة بالمكتبة</span>`;
   } else if (mode === 'test') {
     bar.innerHTML = `<span class="lbl">اختبار سرعة بكلمات عشوائية شائعة</span><span class="spacer"></span><div class="durs">${[15, 30, 60, 120].map(d => `<button data-dur="${d}" class="${d === S.settings.testDur ? 'active' : ''}">${d}ث</button>`).join('')}</div>`;
     bar.querySelectorAll('[data-dur]').forEach(b => b.onclick = () => { S.settings.testDur = +b.dataset.dur; save(); b.blur(); newRound(); });
@@ -576,7 +619,7 @@ function renderWelcome() {
 
 function renderStats() {
   const p = P(), all = ORDER[S.lang], ar = S.lang === 'ar';
-  const merged = [...p.history, ...p.tests].sort((a, b) => a.d - b.d);
+  const merged = [...p.history, ...p.sentHist, ...p.tests].sort((a, b) => a.d - b.d);
   const best = merged.length ? Math.max(...merged.map(x => x.wpm)) : 0;
   const last = p.history.slice(-10);
   const avgW = last.length ? Math.round(last.reduce((a, b) => a + b.wpm, 0) / last.length) : 0;
@@ -594,7 +637,7 @@ function renderStats() {
     <div class="card"><b>${avgW}</b><span>متوسط آخر 10 دروس</span></div>
     <div class="card"><b>${avgA}%</b><span>متوسط الدقة</span></div>
     <div class="card"><b>${avgW && first ? (avgW - first >= 0 ? '+' : '') + (avgW - first) : '—'}</b><span>التحسّن منذ البداية</span></div>
-    <div class="card"><b>${p.history.length + p.tests.length}</b><span>دروس واختبارات</span></div>
+    <div class="card"><b>${merged.length}</b><span>دروس واختبارات</span></div>
     <div class="card"><b>${Math.round(p.totalMs / 60000)}</b><span>دقائق تدريب</span></div>
   </div>
   <div class="panel"><h2>منحنى التقدّم</h2>${chart(merged.slice(-60))}</div>
