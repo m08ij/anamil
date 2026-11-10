@@ -49,6 +49,10 @@ const FINGER = {};
   ['Digit0','Minus','Equal','Backspace','KeyP','BracketLeft','BracketRight','Backslash','Semicolon','Quote','Enter','Slash','ShiftRight'],
   ['Space']
 ].forEach((arr, i) => arr.forEach(c => FINGER[c] = i));
+/* مكان كل مفتاح (صف، وإزاحة أفقية بوحدة المفتاح) لمعرفة المفاتيح المتجاورة */
+const POS = {};
+[[0, ROWS[0].slice(0, 13)], [1.5, ROWS[1].slice(1)], [1.75, ROWS[2].slice(1, 12)], [2.25, ROWS[3].slice(1, 11)]]
+  .forEach(([off, codes], r) => codes.forEach((c, i) => POS[c] = { r, x: off + i }));
 const FINGER_NAME = ['خنصر اليد اليسرى', 'بنصر اليد اليسرى', 'وسطى اليد اليسرى', 'سبّابة اليد اليسرى', 'سبّابة اليد اليمنى', 'وسطى اليد اليمنى', 'بنصر اليد اليمنى', 'خنصر اليد اليمنى', 'الإبهام'];
 
 /* ترتيب فتح الحروف (من الأكثر شيوعاً ومن الصف الأوسط) */
@@ -71,7 +75,7 @@ for (const l of ['en', 'ar']) {
 
 /* ================= State ================= */
 const STORE = 'anamil-v1';
-const newProfile = () => ({ placed: false, placement: null, keys: {}, history: [], tests: [], sentHist: [], seenSent: [], errorWords: {}, unlocked: 6, sinceUnlock: 0, target: 25, totalMs: 0 });
+const newProfile = () => ({ placed: false, placement: null, keys: {}, history: [], tests: [], sentHist: [], seenSent: [], errorWords: {}, conf: {}, unlocked: 6, sinceUnlock: 0, target: 25, totalMs: 0 });
 let S = null;
 try { S = JSON.parse(localStorage.getItem(STORE)); } catch (e) {}
 if (!S || typeof S !== 'object') S = {};
@@ -132,6 +136,15 @@ function makeLesson() {
   const N = +S.settings.length, words = [];
   const review = shuffle(Object.keys(p.errorWords).filter(ok)).slice(0, Math.floor(N / 5));
   words.push(...review);
+  // تمرين على أكثر خطأ متكرر: كلمات فيها الحرف الصح، ويفضّل فيها الحرفين مع بعض
+  const drill = topConfusions(5, 3).find(c => set.has(normU(c.exp)) && c.type !== 'shift');
+  if (drill) {
+    if (!focus.includes(drill.exp)) focus[focus.length - 1] = drill.exp;
+    const both = pool.filter(w => w.includes(drill.exp) && w.includes(drill.typed));
+    const one = pool.filter(w => w.includes(drill.exp));
+    const src = both.length >= 2 ? both : one;
+    for (let i = 0; i < Math.min(4, Math.floor(N / 6)) && src.length; i++) words.push(pick(src));
+  }
   const withFocus = pool.filter(w => focus.some(f => w.includes(f)));
   let guard = 0;
   while (words.length < N && guard++ < 500) {
@@ -142,13 +155,14 @@ function makeLesson() {
     if (words[words.length - 1] === w) continue;
     words.push(w);
   }
-  return { words: shuffle(words), focus, review };
+  return { words: shuffle(words), focus, review, drill };
 }
 function makeSentences() {
   const p = P(), list = SENT[S.lang], avg = avgTime();
   const n = { 15: 2, 25: 3, 40: 5 }[S.settings.length] || 3;
   const weak = ORDER[S.lang].filter(k => { const s = keyStat(k); return s.h + s.m >= 8; })
     .sort((a, b) => weakness(b, avg) - weakness(a, avg)).slice(0, 4);
+  for (const c of topConfusions(2, 3)) if (ORDER[S.lang].includes(c.exp) && !weak.includes(c.exp)) weak.unshift(c.exp);
   const seen = new Set(p.seenSent);
   const picked = list.map((s, i) => {
     const low = s.toLowerCase(); let sc = Math.random() * 2;
@@ -193,6 +207,59 @@ function checkUnlock() {
   }
   return null;
 }
+/* ================= Repeated-mistake analysis ================= */
+const SEP = '\u0001';
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const CONF_INFO = {
+  ahead:      { label: 'سبقت الحرف', tip: 'كتبت الحرف اللي بعده قبله. الإيقاع أهم من السرعة: خلّي الضغطات متساوية.' },
+  shift:      { label: 'مشكلة Shift', tip: 'نفس المفتاح بس Shift غلط. اضغط Shift بخنصر اليد الثانية وثبّته لحد ما تضغط الحرف.' },
+  neighbor:   { label: 'مفتاح جار', tip: 'إصبعك بيزيح عن مكانه. ارجع لصف البداية بعد كل ضغطة، وخفّف السرعة شوي.' },
+  sameFinger: { label: 'نفس الإصبع بصف ثاني', tip: 'نفس الإصبع بس الصف غلط. حرّك الإصبع لفوق أو لتحت بدون ما ترفع إيدك.' },
+  mirror:     { label: 'خلط بين اليدين', tip: 'نفس الإصبع باليد الثانية. حدّد اليد قبل الضغطة، وتدرّب ببطء على الحرفين.' },
+  other:      { label: 'خلط بين حرفين', tip: 'تدرّب على الحرفين ببطء وانتبه لمكان كل واحد.' }
+};
+function classify(exp, typed, ahead) {
+  if (ahead) return 'ahead';
+  const a = REV[S.lang][exp], b = REV[S.lang][typed];
+  if (!a || !b) return 'other';
+  if (a.code === b.code) return 'shift';
+  const pa = POS[a.code], pb = POS[b.code], fa = FINGER[a.code], fb = FINGER[b.code];
+  if (pa && pb) {
+    const dr = Math.abs(pa.r - pb.r), dx = Math.abs(pa.x - pb.x);
+    if ((dr === 0 && dx <= 1) || (dr === 1 && dx <= 1)) return fa === fb ? 'sameFinger' : 'neighbor';
+    if (fa === fb) return 'sameFinger';
+    if (fa + fb === 7 && dr === 0) return 'mirror';
+  }
+  return 'other';
+}
+function topConfusions(k = 8, min = 2) {
+  return Object.entries(P().conf || {}).filter(([, e]) => e.n >= min)
+    .map(([key, e]) => { const [exp, typed] = key.split(SEP); return { exp, typed, n: e.n, type: classify(exp, typed, e.a / e.n >= 0.5) }; })
+    .sort((a, b) => b.n - a.n).slice(0, k);
+}
+function recordConf(exp, c) {
+  if (exp === ' ' || c === ' ' || !exp) return;
+  const p = P(), key = exp + SEP + c;
+  const e = p.conf[key] || (p.conf[key] = { n: 0, a: 0 });
+  e.n++; if (T.text[T.pos + 1] === c) e.a++;
+  T.conf[key] = (T.conf[key] || 0) + 1;
+  if (e.n >= 4 && !T.confHinted) {          // تنبيه واحد بالدرس لما الخطأ يتكرر
+    T.confHinted = true;
+    const r = REV[S.lang][exp], info = CONF_INFO[classify(exp, c, e.a / e.n >= 0.5)];
+    toast(`🔁 خطأ متكرر: كتبت <b>${esc(c)}</b> بدل <b>${esc(exp)}</b> (${info.label})${r ? ` — الحرف الصح بـ${FINGER_NAME[FINGER[r.code]]}` : ''}`);
+  }
+}
+function decayConf() {
+  const p = P();
+  for (const [k, e] of Object.entries(p.conf)) { e.n *= 0.96; e.a *= 0.96; if (e.n < 0.6) delete p.conf[k]; }
+  const keys = Object.entries(p.conf).sort((a, b) => b[1].n - a[1].n);
+  keys.slice(150).forEach(([k]) => delete p.conf[k]);
+}
+function confRow(c) {
+  const info = CONF_INFO[c.type];
+  return `<tr><td>${esc(c.exp)}</td><td class="num">كتبت <b class="badk">${esc(c.typed)}</b></td><td><span class="tag t-${c.type}">${info.label}</span></td><td class="num">×${Math.round(c.n)}</td></tr>`;
+}
+
 function recordKey(k, ok, dt) {
   const p = P(); const s = p.keys[k] || (p.keys[k] = { h: 0, m: 0, t: 0 });
   if (ok) { s.h++; if (dt && dt < 2500) s.t = s.t ? s.t * 0.85 + dt * 0.15 : dt; }
@@ -245,12 +312,12 @@ function placeCaret() {
 /* ================= Round lifecycle ================= */
 function newRound(reuse) {
   stopTicker();
-  let words, focus = [], review = [];
+  let words, focus = [], review = [], drill = null;
   if (mode === 'practice' || mode === 'sentences') {
-    const L = reuse || (mode === 'practice' ? makeLesson() : makeSentences()); words = L.words; focus = L.focus; review = L.review || [];
+    const L = reuse || (mode === 'practice' ? makeLesson() : makeSentences()); words = L.words; focus = L.focus; review = L.review || []; drill = L.drill || null;
   } else words = reuse ? reuse.words : randomWords(mode === 'test' ? Math.max(60, S.settings.testDur * 2) : 120);
   T = {
-    words: [...words], focus, review, text: words.join(' '), pos: 0, marks: [], correct: 0, keys: 0, errors: 0,
+    words: [...words], focus, review, drill, conf: {}, confHinted: false, text: words.join(' '), pos: 0, marks: [], correct: 0, keys: 0, errors: 0,
     started: false, done: false, t0: 0, last: 0, wordErr: new Set(), sk: {}, samples: [], wordOf: [],
     duration: mode === 'test' ? S.settings.testDur : mode === 'placement' ? 60 : 0
   };
@@ -261,7 +328,7 @@ function newRound(reuse) {
 }
 function restart() {
   if (!T) return;
-  if ((mode === 'practice' || mode === 'sentences') && (T.started || T.done)) newRound({ words: T.words, focus: T.focus, review: T.review });
+  if ((mode === 'practice' || mode === 'sentences') && (T.started || T.done)) newRound({ words: T.words, focus: T.focus, review: T.review, drill: T.drill });
   else newRound();
 }
 function next() {
@@ -321,7 +388,7 @@ function typeChar(c) {
   T.last = now; T.keys++;
   if (exp !== ' ') recordKey(exp, ok, T.pos > 0 ? dt : 0);
   if (!ok) {
-    T.errors++; T.wordErr.add(T.wordOf[T.pos]); sound('err'); flashErr(exp);
+    T.errors++; T.wordErr.add(T.wordOf[T.pos]); sound('err'); flashErr(exp); recordConf(exp, c);
     if (S.settings.stopOnError) {
       spans[T.pos].classList.add('miss'); T.hadMiss = true;
       board.classList.remove('shake'); void board.offsetWidth; board.classList.add('shake');
@@ -375,6 +442,11 @@ function finish() {
     .sort((a, b) => (b[1].m / (b[1].h + b[1].m)) - (a[1].m / (a[1].h + a[1].m)) || b[1].m - a[1].m)
     .slice(0, 6).map(([k, s]) => ({ k, acc: s.h / (s.h + s.m) }));
   r.reviewCount = Object.keys(p.errorWords).length;
+  r.conf = Object.entries(T.conf).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([key, n]) => {
+    const [exp, typed] = key.split(SEP), e = p.conf[key];
+    return { exp, typed, n, type: classify(exp, typed, e && e.a / e.n >= 0.5) };
+  });
+  decayConf();
 
   if (mode === 'placement' && T.keys < 15) {
     save(); board.hidden = true; $('#kb').hidden = true; $('#finger').hidden = true;
@@ -462,6 +534,12 @@ function showResult(r) {
   }
   if (r.mode === 'placement' && r.samples.length > 1)
     html += `<div class="r-box" style="grid-column:1/-1"><h3>السرعة خلال الاختبار</h3>${chart(r.samples, true)}</div>`;
+  if (r.conf && r.conf.length) {
+    const top = r.conf[0];
+    html += `<div class="r-box"><h3>🔀 حروف خلطت بينها</h3><div class="pairs">${r.conf.map(c =>
+      `<span class="pair"><b>${esc(c.typed)}</b> بدل <b>${esc(c.exp)}</b>${c.n > 1 ? ` <small>×${c.n}</small>` : ''}<i class="tag t-${c.type}">${CONF_INFO[c.type].label}</i></span>`).join('')}</div>
+      <p class="hint">💡 ${CONF_INFO[top.type].tip}</p></div>`;
+  }
   html += '</div>';
   const actions = `<div class="r-actions"><button class="btn primary big" id="rNext">${cta} <kbd>Enter</kbd></button>${r.mode !== 'placement' ? '<button class="btn" id="rAgain">إعادة نفس النص <kbd>Tab</kbd></button>' : ''}<button class="btn ghost" id="rStats">الإحصائيات</button></div>`;
   box.innerHTML = html.replace('%%ACTIONS%%', actions);
@@ -569,6 +647,7 @@ function renderModeBar() {
     let h = `<div class="chips"><span class="lbl">التركيز على</span>${T.focus.map(k => `<span class="chip">${k}</span>`).join('')}</div>`;
     if (p.unlocked < all.length) h += `<div class="unlock" title="الحروف المفتوحة">${all.map((c, i) => `<i class="${i < p.unlocked ? 'on' : ''} ${c === newest ? 'new' : ''}">${c}</i>`).join('')}</div>`;
     h += `<span class="spacer"></span>`;
+    if (T.drill) h += `<span class="pill" title="${esc(CONF_INFO[T.drill.type].tip)}">🔀 تمرين: <b>${esc(T.drill.exp)}</b> مش <b>${esc(T.drill.typed)}</b></span>`;
     if (T.review.length) h += `<span class="pill">🔁 مراجعة <b>${T.review.length}</b> كلمات غلطت فيها</span>`;
     h += `<span class="pill">الهدف <b>${p.target}</b> ك/د</span>`;
     bar.innerHTML = h;
@@ -617,6 +696,17 @@ function renderWelcome() {
   $('#skipPlacement').onclick = () => { applyPlacement(0, 1); P().placement.skipped = true; save(); go('practice'); };
 }
 
+function confPanel() {
+  const list = topConfusions(8);
+  if (!list.length) return `<div class="panel"><h2>🔀 الأخطاء المتكررة</h2><div class="empty">لسا ما في أخطاء متكررة. لما تخلط بين حرفين أكثر من مرة، بتطلع هون مع نصيحة.</div></div>`;
+  const counts = {};
+  for (const c of list) counts[c.type] = (counts[c.type] || 0) + c.n;
+  const main = Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
+  return `<div class="panel"><h2>🔀 الأخطاء المتكررة <span class="lbl">— الحرف اللي بتكتبه بدل الصح</span></h2>
+    <div class="conf-grid"><table class="kt conf">${list.map(confRow).join('')}</table>
+    <div class="conf-tip"><span class="tag t-${main}">${CONF_INFO[main].label}</span><p>أكثر نوع خطأ عندك. ${CONF_INFO[main].tip}</p>
+    <p class="lbl">الدروس بتضيف تمرين تلقائي على أكثر خطأ متكرر، والأخطاء القديمة بتخف مع الوقت لما تتحسّن.</p></div></div></div>`;
+}
 function renderStats() {
   const p = P(), all = ORDER[S.lang], ar = S.lang === 'ar';
   const merged = [...p.history, ...p.sentHist, ...p.tests].sort((a, b) => a.d - b.d);
@@ -641,6 +731,7 @@ function renderStats() {
     <div class="card"><b>${Math.round(p.totalMs / 60000)}</b><span>دقائق تدريب</span></div>
   </div>
   <div class="panel"><h2>منحنى التقدّم</h2>${chart(merged.slice(-60))}</div>
+  ${confPanel()}
   <div class="panel"><h2>خريطة الأخطاء على الكيبورد <span class="lbl">— كلما احمرّ المفتاح زادت أخطاؤك فيه</span></h2><div class="kb heat" id="heatKb"></div></div>
   <div class="two">
     <div class="panel"><h2>أضعف الحروف</h2>${weak.length ? `<table class="kt">${weak.map(({ k, s }) => {

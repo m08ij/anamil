@@ -276,6 +276,20 @@ body:not(.unfocused) .focus-veil{display:none}
 .bar{height:6px;background:var(--surface2);border-radius:4px;overflow:hidden;min-width:60px}
 .bar i{display:block;height:100%;background:var(--bad);border-radius:4px}
 .num{font-family:"JetBrains Mono",monospace;color:var(--muted);font-size:12px;white-space:nowrap}
+.tag{display:inline-block;font-style:normal;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;white-space:nowrap;
+  background:color-mix(in srgb,var(--tc) 16%,transparent);color:var(--tc)}
+.t-ahead{--tc:var(--f5)}.t-shift{--tc:var(--f4)}.t-neighbor{--tc:var(--fix)}.t-sameFinger{--tc:var(--f6)}.t-mirror{--tc:var(--f0)}.t-other{--tc:var(--muted)}
+.pairs{display:flex;flex-wrap:wrap;gap:8px}
+.pair{display:inline-flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--line);padding:6px 10px;border-radius:10px;font-size:14px}
+.pair b{font-size:18px;color:var(--text)}
+.pair b:first-child{color:var(--bad)}
+.pair small{color:var(--muted);font-family:"JetBrains Mono",monospace}
+.r-box .hint{margin-top:10px;font-size:13px;color:var(--muted)}
+.conf-grid{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:18px;align-items:start}
+.conf-tip{background:var(--bg2);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.conf-tip p{margin:8px 0 0;line-height:1.8}
+.badk{color:var(--bad);font-size:18px}
+@media (max-width:720px){.conf-grid{grid-template-columns:1fr}}
 .words{display:flex;flex-wrap:wrap;gap:6px}
 .words span{background:var(--bg2);border:1px solid var(--line);padding:4px 10px;border-radius:8px;font-size:15px}
 
